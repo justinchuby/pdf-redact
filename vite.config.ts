@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  base: command === "build" ? "/pdf-redact/" : "/",
   build: {
     target: "esnext",
   },
@@ -12,4 +13,4 @@ export default defineConfig({
     port: 5173,
     strictPort: false,
   },
-});
+}));
