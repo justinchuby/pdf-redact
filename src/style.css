@@ -359,6 +359,54 @@ h2 {
   overflow: auto;
 }
 
+.candidate-group {
+  border-bottom: 1px solid #d8ddd7;
+}
+
+.candidate-group:last-child {
+  border-bottom: 0;
+}
+
+.candidate-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #4d5e52;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.candidate-group-header::-webkit-details-marker {
+  display: none;
+}
+
+.candidate-group-header::before {
+  content: "▾";
+  font-size: 0.7rem;
+  transition: transform 0.15s;
+}
+
+details.candidate-group:not([open]) .candidate-group-header::before {
+  transform: rotate(-90deg);
+}
+
+.candidate-group-count {
+  margin-left: auto;
+  background: #edf0ec;
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 0.75rem;
+  color: #616760;
+}
+
+.candidate-group .candidate-row:last-child {
+  border-bottom: 0;
+}
+
 .candidate-row {
   min-height: 46px;
   padding: 8px 12px;

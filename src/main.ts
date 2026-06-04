@@ -1076,6 +1076,24 @@ function openPdfFromOriginal() {
   return new mupdf.PDFDocument(state.originalBytes.slice());
 }
 
+function renderCandidateRow(candidate: RedactionCandidate) {
+  return `
+    <div class="candidate-row" data-jump-to="${candidate.id}">
+      <label class="candidate-check">
+        <input type="checkbox" data-candidate="${candidate.id}" ${candidate.selected ? "checked" : ""} />
+        <span class="candidate-type">${escapeHtml(candidate.label)}</span>
+        <span class="candidate-text">${escapeHtml(maskCandidateText(candidate.text))}</span>
+        <span class="candidate-page">p${candidate.pageIndex + 1}</span>
+      </label>
+      ${
+        candidate.label === "Manual box"
+          ? `<button class="remove-manual" type="button" data-remove-manual="${candidate.id}">Remove</button>`
+          : ""
+      }
+    </div>
+  `;
+}
+
 function renderCandidateList() {
   if (!state.file) {
     return `<div class="empty">Choose a PDF to begin.</div>`;
@@ -1084,25 +1102,38 @@ function renderCandidateList() {
     return `<div class="empty">No candidates yet. Try enabling more patterns or adding a custom term.</div>`;
   }
 
+  const PAGE_GROUP = 10;
+  const maxPage = Math.max(...state.candidates.map((c) => c.pageIndex));
+  const numGroups = Math.ceil((maxPage + 1) / PAGE_GROUP);
+
+  if (numGroups <= 1) {
+    return `
+      <div class="candidate-list">
+        ${state.candidates.map(renderCandidateRow).join("")}
+      </div>
+    `;
+  }
+
+  const groups = Array.from({ length: numGroups }, (_, g) => {
+    const start = g * PAGE_GROUP;
+    const end = start + PAGE_GROUP - 1;
+    const members = state.candidates.filter((c) => c.pageIndex >= start && c.pageIndex <= end);
+    return { start, end: Math.min(end, maxPage), members };
+  }).filter((g) => g.members.length > 0);
+
   return `
     <div class="candidate-list">
-      ${state.candidates
+      ${groups
         .map(
-          (candidate) => `
-            <div class="candidate-row" data-jump-to="${candidate.id}">
-              <label class="candidate-check">
-                <input type="checkbox" data-candidate="${candidate.id}" ${candidate.selected ? "checked" : ""} />
-                <span class="candidate-type">${escapeHtml(candidate.label)}</span>
-                <span class="candidate-text">${escapeHtml(maskCandidateText(candidate.text))}</span>
-                <span class="candidate-page">Page ${candidate.pageIndex + 1}</span>
-              </label>
-              ${
-                candidate.label === "Manual box"
-                  ? `<button class="remove-manual" type="button" data-remove-manual="${candidate.id}">Remove</button>`
-                  : ""
-              }
-            </div>
-          `,
+          (group) => `
+          <details class="candidate-group" open>
+            <summary class="candidate-group-header">
+              Pages ${group.start + 1}–${group.end + 1}
+              <span class="candidate-group-count">${group.members.length}</span>
+            </summary>
+            ${group.members.map(renderCandidateRow).join("")}
+          </details>
+        `,
         )
         .join("")}
     </div>
