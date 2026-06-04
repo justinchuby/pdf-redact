@@ -244,14 +244,20 @@ function render() {
             </div>
             ${state.busy ? `<span class="working">Working...</span>` : ""}
           </div>
-          ${state.previews.length > 0 ? `<h2 class="section-title">Original PDF review</h2>` : ""}
           ${
             state.drawMode
               ? `<div class="draw-hint">Drag on the PDF page to add a manual redaction box.</div>`
               : ""
           }
-          ${renderCandidateList()}
-          ${renderPreviews()}
+          <div class="preview-body">
+            <div class="pages-area">
+              ${state.previews.length > 0 ? `<h2 class="section-title">Original PDF review</h2>` : ""}
+              ${renderPreviews()}
+            </div>
+            <aside class="candidate-panel">
+              ${renderCandidateList()}
+            </aside>
+          </div>
         </section>
       </section>
     </main>
@@ -363,6 +369,19 @@ function wireEvents() {
       if (!candidateId) return;
       removeManualCandidate(candidateId);
       render();
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>("[data-jump-to]").forEach((row) => {
+    row.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement).closest("input,button")) return;
+      const candidateId = row.dataset.jumpTo;
+      if (!candidateId) return;
+      const overlay = document.getElementById(`overlay-${candidateId}-0`);
+      if (!overlay) return;
+      overlay.scrollIntoView({ behavior: "smooth", block: "center" });
+      overlay.classList.add("overlay-highlighted");
+      overlay.addEventListener("animationend", () => overlay.classList.remove("overlay-highlighted"), { once: true });
     });
   });
 
@@ -1043,7 +1062,7 @@ function renderCandidateList() {
       ${state.candidates
         .map(
           (candidate) => `
-            <div class="candidate-row">
+            <div class="candidate-row" data-jump-to="${candidate.id}">
               <label class="candidate-check">
                 <input type="checkbox" data-candidate="${candidate.id}" ${candidate.selected ? "checked" : ""} />
                 <span class="candidate-type">${escapeHtml(candidate.label)}</span>
@@ -1076,7 +1095,7 @@ function renderPreviews() {
               <div class="page-title">Page ${preview.pageIndex + 1}</div>
               <div class="page-canvas ${state.drawMode ? "draw-enabled" : ""}" data-page-index="${preview.pageIndex}" style="width:min(${preview.width}px, 100%); aspect-ratio:${preview.width} / ${preview.height}">
                 <img src="${preview.imageUrl}" alt="Page ${preview.pageIndex + 1} preview" />
-                ${pageCandidates.flatMap((candidate) => candidate.rects.map((rect) => renderOverlay(preview, candidate, rect))).join("")}
+                ${pageCandidates.flatMap((candidate) => candidate.rects.map((rect, i) => renderOverlay(preview, candidate, rect, i))).join("")}
               </div>
             </article>
           `;
@@ -1086,7 +1105,7 @@ function renderPreviews() {
   `;
 }
 
-function renderOverlay(preview: PagePreview, candidate: RedactionCandidate, rect: Rect) {
+function renderOverlay(preview: PagePreview, candidate: RedactionCandidate, rect: Rect, rectIndex: number) {
   const [leftBound, topBound, rightBound, bottomBound] = preview.bounds;
   const scaleX = preview.width / (rightBound - leftBound);
   const scaleY = preview.height / (bottomBound - topBound);
@@ -1097,6 +1116,7 @@ function renderOverlay(preview: PagePreview, candidate: RedactionCandidate, rect
 
   return `
     <div
+      id="overlay-${candidate.id}-${rectIndex}"
       class="redaction-overlay ${candidate.selected ? "selected" : "unselected"}"
       title="${escapeHtml(candidate.label)}: ${escapeHtml(maskCandidateText(candidate.text))}"
       style="left:${left}%; top:${top}%; width:${width}%; height:${height}%"

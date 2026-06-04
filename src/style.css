@@ -277,6 +277,29 @@ h2 {
   min-width: 0;
 }
 
+.preview-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 14px;
+  align-items: start;
+}
+
+.pages-area {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.candidate-panel {
+  position: sticky;
+  top: 70px;
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
+  border: 1px solid #d8ddd7;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
 .candidate-bar {
   position: sticky;
   top: 16px;
@@ -333,7 +356,6 @@ h2 {
 }
 
 .candidate-list {
-  max-height: 220px;
   overflow: auto;
 }
 
@@ -341,6 +363,11 @@ h2 {
   min-height: 46px;
   padding: 8px 12px;
   border-bottom: 1px solid #edf0ec;
+  cursor: pointer;
+}
+
+.candidate-row:hover {
+  background: #f6f7f5;
 }
 
 .candidate-check {
@@ -524,6 +551,17 @@ h2 {
   font-size: 0.78rem;
 }
 
+@keyframes overlay-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(210, 74, 47, 0.7); outline: 3px solid #d24a2f; }
+  70%  { box-shadow: 0 0 0 10px rgba(210, 74, 47, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(210, 74, 47, 0); outline-color: transparent; }
+}
+
+.overlay-highlighted {
+  animation: overlay-pulse 1s ease-out forwards;
+  z-index: 4;
+}
+
 .manual-draft {
   position: absolute;
   border: 2px dashed #245c3a;
@@ -540,6 +578,15 @@ h2 {
   .workspace {
     grid-template-columns: 1fr;
     display: grid;
+  }
+
+  .preview-body {
+    grid-template-columns: 1fr;
+  }
+
+  .candidate-panel {
+    position: static;
+    max-height: none;
   }
 
   .controls {
