@@ -2,7 +2,7 @@
 
 A local-only PDF redaction web app for SSN, EIN, ITIN, and other tax-document identifiers.
 
-The app runs in your browser, but processing happens locally with MuPDF.js/WebAssembly. It does not upload files to a server.
+The app runs entirely in your browser using MuPDF.js/WebAssembly. **Files are never uploaded to a server.**
 
 ## Run
 
@@ -22,4 +22,11 @@ Then open the local URL Vite prints, usually `http://127.0.0.1:5173`.
 - Custom terms can be exact text or JavaScript-style regex such as `/\\bApt\\s+\\d+\\b/i`.
 - Review every candidate before exporting. Pattern matching can miss scanned-image PDFs unless OCR has already added a text layer.
 - Chrome and Edge support saving through the File System Access API. Other browsers fall back to a normal download.
-- MuPDF.js is AGPL/commercial licensed. Personal local use is straightforward; distribution or commercial use may require reviewing AGPL obligations or buying a commercial license.
+
+## License
+
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**, primarily because it uses [MuPDF.js](https://mupdf.com/), which is AGPL-3.0 licensed.
+
+Under AGPL-3.0, anyone who interacts with this software over a network is entitled to receive the corresponding source code. The full source is available in this repository.
+
+If you need to use MuPDF under a different license (e.g., for commercial or proprietary use), contact [Artifex](https://artifex.com/) for a commercial license.
