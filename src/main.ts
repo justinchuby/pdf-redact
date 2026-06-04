@@ -1,0 +1,1268 @@
+import * as mupdf from "mupdf";
+import "./style.css";
+
+type Rect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type PatternDefinition = {
+  id: string;
+  label: string;
+  description: string;
+  expression: RegExp;
+  group?: number;
+  defaultEnabled: boolean;
+};
+
+type RedactionCandidate = {
+  id: string;
+  pageIndex: number;
+  label: string;
+  text: string;
+  rects: Rect[];
+  selected: boolean;
+};
+
+type TextChar = {
+  c: string;
+  rect: Rect;
+};
+
+type TextLine = {
+  text: string;
+  chars: TextChar[];
+};
+
+type PagePreview = {
+  pageIndex: number;
+  width: number;
+  height: number;
+  bounds: [number, number, number, number];
+  imageUrl: string;
+};
+
+type AppState = {
+  file?: File;
+  originalBytes?: Uint8Array;
+  candidates: RedactionCandidate[];
+  manualCandidates: RedactionCandidate[];
+  previews: PagePreview[];
+  enabledPatternIds: Set<string>;
+  customTerms: string[];
+  drawMode: boolean;
+  scanDirty: boolean;
+  busy: boolean;
+};
+
+const RENDER_SCALE = 1.35;
+const REDACTION_PADDING_POINTS = 1.5;
+
+const PATTERNS: PatternDefinition[] = [
+  {
+    id: "ssn",
+    label: "SSN",
+    description: "US Social Security numbers such as 123-45-6789",
+    expression: /(?:^|[^\d])((?!000|666|9\d\d)\d{3}[- ]?(?!00)\d{2}[- ]?(?!0000)\d{4})(?!\d)/g,
+    group: 1,
+    defaultEnabled: true,
+  },
+  {
+    id: "form-ssn",
+    label: "Form SSN fields",
+    description: "Tax form SSNs split into 3-2-4 digit boxes near Social Security Number labels",
+    expression:
+      /\b(?:(?:your|spouse'?s?)\s+)?(?:ssn|social\s+security\s+number)\b[\s\S]{0,180}?((?:\d[\s-]*){3}[\s-]+(?:\d[\s-]*){2}[\s-]+(?:\d[\s-]*){4})(?![\s-]*\d)/gi,
+    group: 1,
+    defaultEnabled: true,
+  },
+  {
+    id: "itin",
+    label: "ITIN",
+    description: "US ITIN numbers that begin with 9",
+    expression: /(?:^|[^\d])(9\d{2}[- ]?(?:7\d|8[0-8]|9[0-2]|9[4-9])[- ]?\d{4})(?!\d)/g,
+    group: 1,
+    defaultEnabled: true,
+  },
+  {
+    id: "ein",
+    label: "EIN",
+    description: "Employer Identification Numbers such as 12-3456789",
+    expression: /(?:^|[^\d])(\d{2}-\d{7})(?!\d)/g,
+    group: 1,
+    defaultEnabled: true,
+  },
+  {
+    id: "tax-label",
+    label: "Tax ID labels",
+    description: "Numbers near labels like SSN, TIN, Taxpayer ID, or EIN",
+    expression:
+      /\b(?:ssn|social\s+security(?:\s+number)?|tin|taxpayer id|tax id|ein|itin)\b[^\d]{0,80}(\d{2,3}[- ]?\d{2}[- ]?\d{4,7})/gi,
+    group: 1,
+    defaultEnabled: true,
+  },
+  {
+    id: "bank-label",
+    label: "Bank labels",
+    description: "Long digit strings near account, routing, or ABA labels",
+    expression: /\b(?:account|acct|routing|aba|bank account)\b[^\n\r\d]{0,32}(\d[\d -]{5,22}\d)/gi,
+    group: 1,
+    defaultEnabled: true,
+  },
+  {
+    id: "home-address",
+    label: "Home address",
+    description: "Home address fields on tax forms",
+    expression: /\bhome\s+address\b[^\n\r\d]{0,100}(\d[^\n\r]{4,120})/gi,
+    group: 1,
+    defaultEnabled: true,
+  },
+  {
+    id: "phone",
+    label: "Phone",
+    description: "US phone numbers. Disabled by default to reduce false positives.",
+    expression: /(?:^|[^\d])((?:\+1[-. ]?)?(?:\(\d{3}\)|\d{3})[-. ]?\d{3}[-. ]?\d{4})(?!\d)/g,
+    group: 1,
+    defaultEnabled: false,
+  },
+];
+
+const state: AppState = {
+  candidates: [],
+  manualCandidates: [],
+  previews: [],
+  enabledPatternIds: new Set(PATTERNS.filter((pattern) => pattern.defaultEnabled).map((pattern) => pattern.id)),
+  customTerms: [],
+  drawMode: false,
+  scanDirty: false,
+  busy: false,
+};
+
+const app = document.querySelector<HTMLDivElement>("#app");
+
+if (!app) {
+  throw new Error("App root not found");
+}
+
+const appRoot = app;
+
+render();
+
+function render() {
+  appRoot.innerHTML = `
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <p class="eyebrow">Local-only PDF redaction</p>
+          <h1>PDF Redactor</h1>
+          <p class="subtle">Choose a tax PDF, review detected sensitive fields, then export a truly redacted copy.</p>
+        </div>
+        <div class="status-pill">${state.file ? escapeHtml(state.file.name) : "No file selected"}</div>
+      </section>
+
+      <section class="workspace">
+        <aside class="controls">
+          <label class="drop-zone" for="pdf-input">
+            <input id="pdf-input" type="file" accept="application/pdf,.pdf" />
+            <span>Choose or drop PDF</span>
+            <small>Everything stays on this computer.</small>
+          </label>
+
+          <div class="panel">
+            <h2>Patterns</h2>
+            <div class="pattern-list">
+              ${PATTERNS.map(
+                (pattern) => `
+                  <label class="check-row" title="${escapeHtml(pattern.description)}">
+                    <input type="checkbox" data-pattern="${pattern.id}" ${
+                      state.enabledPatternIds.has(pattern.id) ? "checked" : ""
+                    } />
+                    <span>${escapeHtml(pattern.label)}</span>
+                  </label>
+                `,
+              ).join("")}
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>Custom terms</h2>
+            <div class="inline-form">
+              <input id="custom-term" type="text" placeholder="Exact text or /regex/i" />
+              <button id="add-term" type="button">Add</button>
+            </div>
+            <p class="field-help">Use exact text, or regex like <code>/\\bApt\\s+\\d+\\b/i</code>.</p>
+            <div class="chips">
+              ${state.customTerms
+                .map(
+                  (term) => `
+                    <button class="chip" type="button" data-remove-term="${escapeHtml(term)}">
+                      ${escapeHtml(term)} <span aria-hidden="true">x</span>
+                    </button>
+                  `,
+                )
+                .join("")}
+            </div>
+          </div>
+
+          <div class="actions">
+            <button id="scan" class="${state.scanDirty ? "attention" : ""}" type="button" ${
+              !state.file || state.busy ? "disabled" : ""
+            }>${state.scanDirty ? "Scan needed" : "Scan PDF"}</button>
+            <button id="save-redacted" class="primary" type="button" ${
+              !state.file || selectedCandidates().length === 0 || state.busy ? "disabled" : ""
+            }>Download redacted PDF</button>
+          </div>
+          ${state.scanDirty ? `<p class="scan-note">Detection rules changed. Click Scan to refresh candidates.</p>` : ""}
+
+          <p class="fine-print">
+            Scanned-image PDFs need OCR first. This tool redacts text and overlapping image pixels where MuPDF can map a match to page geometry.
+          </p>
+        </aside>
+
+        <section class="preview">
+          <div class="candidate-bar">
+            <div>
+              <strong>${state.candidates.length}</strong>
+              <span>candidate${state.candidates.length === 1 ? "" : "s"} found</span>
+            </div>
+            <div class="candidate-tools">
+              <button id="toggle-draw" class="${state.drawMode ? "active" : ""}" type="button" ${
+                state.previews.length === 0 || state.busy ? "disabled" : ""
+              }>${state.drawMode ? "Drawing on" : "Draw box"}</button>
+              <button id="select-all" type="button" ${state.candidates.length === 0 ? "disabled" : ""}>Select all</button>
+              <button id="select-none" type="button" ${state.candidates.length === 0 ? "disabled" : ""}>Select none</button>
+            </div>
+            ${state.busy ? `<span class="working">Working...</span>` : ""}
+          </div>
+          ${state.previews.length > 0 ? `<h2 class="section-title">Original PDF review</h2>` : ""}
+          ${
+            state.drawMode
+              ? `<div class="draw-hint">Drag on the PDF page to add a manual redaction box.</div>`
+              : ""
+          }
+          ${renderCandidateList()}
+          ${renderPreviews()}
+        </section>
+      </section>
+    </main>
+  `;
+
+  wireEvents();
+}
+
+function wireEvents() {
+  document.querySelector<HTMLInputElement>("#pdf-input")?.addEventListener("change", async (event) => {
+    const input = event.currentTarget as HTMLInputElement;
+    if (input.files?.[0]) {
+      await loadFile(input.files[0]);
+    }
+  });
+
+  document.querySelector<HTMLLabelElement>(".drop-zone")?.addEventListener("dragover", (event) => {
+    event.preventDefault();
+  });
+
+  document.querySelector<HTMLLabelElement>(".drop-zone")?.addEventListener("drop", async (event) => {
+    event.preventDefault();
+    const file = event.dataTransfer?.files?.[0];
+    if (file?.type === "application/pdf" || file?.name.toLowerCase().endsWith(".pdf")) {
+      await loadFile(file);
+    }
+  });
+
+  document.querySelectorAll<HTMLInputElement>("[data-pattern]").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      const patternId = checkbox.dataset.pattern;
+      if (!patternId) return;
+      if (checkbox.checked) {
+        state.enabledPatternIds.add(patternId);
+      } else {
+        state.enabledPatternIds.delete(patternId);
+      }
+      markScanDirty();
+      render();
+    });
+  });
+
+  document.querySelector<HTMLButtonElement>("#add-term")?.addEventListener("click", addCustomTerm);
+  document.querySelector<HTMLInputElement>("#custom-term")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      addCustomTerm();
+    }
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-remove-term]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const term = button.dataset.removeTerm;
+      state.customTerms = state.customTerms.filter((item) => item !== term);
+      markScanDirty();
+      render();
+    });
+  });
+
+  document.querySelector<HTMLButtonElement>("#scan")?.addEventListener("click", scanCurrentFile);
+  document.querySelector<HTMLButtonElement>("#toggle-draw")?.addEventListener("click", () => {
+    state.drawMode = !state.drawMode;
+    render();
+  });
+  document.querySelector<HTMLButtonElement>("#select-all")?.addEventListener("click", () => {
+    state.candidates = state.candidates.map((candidate) => ({ ...candidate, selected: true }));
+    state.manualCandidates = state.manualCandidates.map((candidate) => ({ ...candidate, selected: true }));
+    render();
+  });
+  document.querySelector<HTMLButtonElement>("#select-none")?.addEventListener("click", () => {
+    state.candidates = state.candidates.map((candidate) => ({ ...candidate, selected: false }));
+    state.manualCandidates = state.manualCandidates.map((candidate) => ({ ...candidate, selected: false }));
+    render();
+  });
+  document.querySelector<HTMLButtonElement>("#save-redacted")?.addEventListener("click", downloadRedactedPdf);
+
+  document.querySelectorAll<HTMLInputElement>("[data-candidate]").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      const candidateId = checkbox.dataset.candidate;
+      if (!candidateId) return;
+      setCandidateSelected(candidateId, checkbox.checked);
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-remove-manual]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const candidateId = button.dataset.removeManual;
+      if (!candidateId) return;
+      removeManualCandidate(candidateId);
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-toggle-overlay]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const candidateId = button.dataset.toggleOverlay;
+      if (!candidateId) return;
+      const candidate = state.candidates.find((item) => item.id === candidateId);
+      setCandidateSelected(candidateId, !candidate?.selected);
+      render();
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-remove-overlay]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const candidateId = button.dataset.removeOverlay;
+      if (!candidateId) return;
+      removeManualCandidate(candidateId);
+      render();
+    });
+  });
+
+  wireManualDrawing();
+}
+
+function setCandidateSelected(candidateId: string, selected: boolean) {
+  state.candidates = state.candidates.map((candidate) =>
+    candidate.id === candidateId ? { ...candidate, selected } : candidate,
+  );
+  state.manualCandidates = state.manualCandidates.map((candidate) =>
+    candidate.id === candidateId ? { ...candidate, selected } : candidate,
+  );
+}
+
+function removeManualCandidate(candidateId: string) {
+  state.manualCandidates = state.manualCandidates.filter((candidate) => candidate.id !== candidateId);
+  state.candidates = state.candidates.filter((candidate) => candidate.id !== candidateId);
+}
+
+async function loadFile(file: File) {
+  revokePreviewUrls();
+  state.file = file;
+  state.originalBytes = new Uint8Array(await file.arrayBuffer());
+  state.candidates = [];
+  state.manualCandidates = [];
+  state.previews = [];
+  state.drawMode = false;
+  state.scanDirty = false;
+  render();
+  await scanCurrentFile();
+}
+
+function addCustomTerm() {
+  const input = document.querySelector<HTMLInputElement>("#custom-term");
+  const term = input?.value.trim();
+  if (!term) return;
+  if (!state.customTerms.includes(term)) {
+    state.customTerms = [...state.customTerms, term];
+  }
+  if (input) input.value = "";
+  markScanDirty();
+  render();
+}
+
+function markScanDirty() {
+  if (state.originalBytes) {
+    state.scanDirty = true;
+  }
+}
+
+function wireManualDrawing() {
+  document.querySelectorAll<HTMLElement>(".page-canvas[data-page-index]").forEach((canvas) => {
+    canvas.addEventListener("pointerdown", (event) => {
+      if (!state.drawMode || state.busy) return;
+
+      const pageIndex = Number(canvas.dataset.pageIndex);
+      const preview = state.previews.find((item) => item.pageIndex === pageIndex);
+      if (!preview) return;
+
+      event.preventDefault();
+      const canvasBox = canvas.getBoundingClientRect();
+      const start = pointWithinElement(event, canvasBox);
+      const draft = document.createElement("div");
+      draft.className = "manual-draft";
+      canvas.appendChild(draft);
+      canvas.setPointerCapture(event.pointerId);
+
+      const updateDraft = (moveEvent: PointerEvent) => {
+        const current = pointWithinElement(moveEvent, canvasBox);
+        positionDraft(draft, start, current);
+      };
+
+      const cancelDraft = () => {
+        canvas.releasePointerCapture(event.pointerId);
+        canvas.removeEventListener("pointermove", updateDraft);
+        canvas.removeEventListener("pointerup", finishDraft);
+        canvas.removeEventListener("pointercancel", cancelDraft);
+        draft.remove();
+      };
+
+      const finishDraft = (upEvent: PointerEvent) => {
+        const end = pointWithinElement(upEvent, canvasBox);
+        canvas.releasePointerCapture(upEvent.pointerId);
+        canvas.removeEventListener("pointermove", updateDraft);
+        canvas.removeEventListener("pointerup", finishDraft);
+        canvas.removeEventListener("pointercancel", cancelDraft);
+        draft.remove();
+
+        const drawnWidth = Math.abs(end.x - start.x);
+        const drawnHeight = Math.abs(end.y - start.y);
+        if (drawnWidth < 6 || drawnHeight < 6) return;
+
+        addManualCandidate(pageIndex, manualRectFromPoints(start, end, canvasBox, preview));
+      };
+
+      positionDraft(draft, start, start);
+      canvas.addEventListener("pointermove", updateDraft);
+      canvas.addEventListener("pointerup", finishDraft);
+      canvas.addEventListener("pointercancel", cancelDraft);
+    });
+  });
+}
+
+function pointWithinElement(event: PointerEvent, box: DOMRect) {
+  return {
+    x: Math.min(Math.max(event.clientX - box.left, 0), box.width),
+    y: Math.min(Math.max(event.clientY - box.top, 0), box.height),
+  };
+}
+
+function positionDraft(draft: HTMLElement, start: { x: number; y: number }, end: { x: number; y: number }) {
+  const left = Math.min(start.x, end.x);
+  const top = Math.min(start.y, end.y);
+  const width = Math.abs(end.x - start.x);
+  const height = Math.abs(end.y - start.y);
+  draft.style.left = `${left}px`;
+  draft.style.top = `${top}px`;
+  draft.style.width = `${width}px`;
+  draft.style.height = `${height}px`;
+}
+
+function manualRectFromPoints(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  canvasBox: DOMRect,
+  preview: PagePreview,
+): Rect {
+  const [leftBound, topBound, rightBound, bottomBound] = preview.bounds;
+  const leftPercent = Math.min(start.x, end.x) / canvasBox.width;
+  const topPercent = Math.min(start.y, end.y) / canvasBox.height;
+  const widthPercent = Math.abs(end.x - start.x) / canvasBox.width;
+  const heightPercent = Math.abs(end.y - start.y) / canvasBox.height;
+
+  return {
+    x: leftBound + leftPercent * (rightBound - leftBound),
+    y: topBound + topPercent * (bottomBound - topBound),
+    width: widthPercent * (rightBound - leftBound),
+    height: heightPercent * (bottomBound - topBound),
+  };
+}
+
+function addManualCandidate(pageIndex: number, rect: Rect) {
+  const candidate: RedactionCandidate = {
+    id: `manual-${Date.now()}-${state.manualCandidates.length + 1}`,
+    pageIndex,
+    label: "Manual box",
+    text: "Manual redaction box",
+    rects: [rect],
+    selected: true,
+  };
+  state.manualCandidates = [...state.manualCandidates, candidate];
+  state.candidates = [...state.candidates, candidate];
+  render();
+}
+
+async function scanCurrentFile() {
+  if (!state.originalBytes) return;
+
+  setBusy(true);
+  await nextFrame();
+
+  try {
+    revokePreviewUrls();
+    const document = openPdfFromOriginal();
+    bakeFormFields(document);
+    state.candidates = [...scanDocument(document), ...state.manualCandidates];
+    state.previews = renderPagePreviews(document);
+    state.scanDirty = false;
+  } catch (error) {
+    state.candidates = [];
+    state.previews = [];
+    showError(error);
+  } finally {
+    setBusy(false);
+  }
+}
+
+function scanDocument(document: any): RedactionCandidate[] {
+  const candidates: RedactionCandidate[] = [];
+  const seen = new Set<string>();
+  const pageCount = document.countPages();
+  const enabledPatterns = PATTERNS.filter((pattern) => state.enabledPatternIds.has(pattern.id));
+
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+    const page = document.loadPage(pageIndex);
+    const text = page.toStructuredText().asText();
+    const lines = collectTextLines(page);
+    addLineBasedCandidates(pageIndex, lines, candidates, seen);
+
+    const terms = [
+      ...findPatternTerms(text, enabledPatterns),
+      ...findCustomTerms(text),
+    ];
+
+    for (const term of terms) {
+      const normalized = term.text.trim();
+      if (normalized.length < 2) continue;
+
+      const hits = page.search(normalized, 200);
+      for (const hit of hits) {
+        const rects = (hit as number[][]).map(quadToRect).filter((rect: Rect) => rect.width > 0 && rect.height > 0);
+        if (rects.length === 0) continue;
+
+        addCandidate(candidates, seen, {
+          pageIndex,
+          label: term.label,
+          text: normalized,
+          rects,
+        });
+      }
+    }
+  }
+
+  return candidates.sort((a, b) => a.pageIndex - b.pageIndex || a.text.localeCompare(b.text));
+}
+
+function addCandidate(
+  candidates: RedactionCandidate[],
+  seen: Set<string>,
+  candidate: Omit<RedactionCandidate, "id" | "selected">,
+) {
+  const rects = candidate.rects.filter((rect) => rect.width > 0 && rect.height > 0);
+  if (rects.length === 0) return;
+
+  const key = `${candidate.pageIndex}:${candidate.label}:${candidate.text}:${rects.map(rectKey).join("|")}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+
+  candidates.push({
+    ...candidate,
+    id: `candidate-${candidates.length + 1}`,
+    rects,
+    selected: true,
+  });
+}
+
+function findPatternTerms(text: string, patterns: PatternDefinition[]) {
+  const terms: Array<{ label: string; text: string }> = [];
+
+  for (const pattern of patterns) {
+    pattern.expression.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.expression.exec(text)) !== null) {
+      const term = match[pattern.group ?? 0]?.trim();
+      if (term && isPlausiblePatternTerm(pattern, term)) {
+        terms.push({ label: pattern.label, text: term });
+      }
+    }
+  }
+
+  return terms;
+}
+
+function findCustomTerms(text: string) {
+  const terms: Array<{ label: string; text: string }> = [];
+
+  for (const rawTerm of state.customTerms) {
+    const parsedRegex = parseRegexTerm(rawTerm);
+    if (!parsedRegex) {
+      terms.push({ label: "Custom", text: rawTerm });
+      continue;
+    }
+
+    let match: RegExpExecArray | null;
+    parsedRegex.lastIndex = 0;
+    while ((match = parsedRegex.exec(text)) !== null) {
+      const term = (match[1] ?? match[0]).trim();
+      if (term) {
+        terms.push({ label: "Custom regex", text: term });
+      }
+      if (match[0] === "") parsedRegex.lastIndex += 1;
+      if (!parsedRegex.global) break;
+    }
+  }
+
+  return terms;
+}
+
+function parseRegexTerm(value: string) {
+  const match = value.match(/^\/(.+)\/([dgimsuvy]*)$/);
+  if (!match) return null;
+
+  try {
+    const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
+    return new RegExp(match[1], flags);
+  } catch {
+    return null;
+  }
+}
+
+function collectTextLines(page: any): TextLine[] {
+  const lines: TextLine[] = [];
+  let currentLine: TextLine | null = null;
+
+  page.toStructuredText().walk({
+    beginLine() {
+      currentLine = { text: "", chars: [] };
+    },
+    onChar(c: string, _origin: unknown, _font: unknown, _size: unknown, quad: number[]) {
+      if (!currentLine) return;
+      currentLine.text += c;
+      currentLine.chars.push({ c, rect: quadToRect(quad) });
+    },
+    endLine() {
+      if (currentLine && currentLine.text.trim()) {
+        lines.push(currentLine);
+      }
+      currentLine = null;
+    },
+  });
+
+  return lines;
+}
+
+function addLineBasedCandidates(
+  pageIndex: number,
+  lines: TextLine[],
+  candidates: RedactionCandidate[],
+  seen: Set<string>,
+) {
+  if (state.enabledPatternIds.has("form-ssn")) {
+    addFormSsnLineCandidates(pageIndex, lines, candidates, seen);
+  }
+
+  if (state.enabledPatternIds.has("home-address")) {
+    addHomeAddressLineCandidates(pageIndex, lines, candidates, seen);
+  }
+}
+
+function addFormSsnLineCandidates(
+  pageIndex: number,
+  lines: TextLine[],
+  candidates: RedactionCandidate[],
+  seen: Set<string>,
+) {
+  const labelPattern = /\b(?:your|spouse'?s?)\s+social\s+security\s+number\b/i;
+
+  lines.forEach((line, index) => {
+    const labelMatch = line.text.match(labelPattern);
+    if (!labelMatch || labelMatch.index === undefined) return;
+
+    const labelEnd = labelMatch.index + labelMatch[0].length;
+    const candidateLines = [line, ...lines.slice(index + 1, index + 3)];
+    for (const candidateLine of candidateLines) {
+      const startIndex = candidateLine === line ? labelEnd : 0;
+      const digitIndexes = collectDigitIndexes(candidateLine, startIndex).slice(0, 9);
+      const digitChars = digitIndexes.map((digitIndex) => candidateLine.chars[digitIndex]);
+      const digits = digitChars.map((char) => char?.c ?? "").join("");
+      if (digitIndexes.length !== 9 || !isPlausibleSsnDigits(digits)) continue;
+
+      const firstIndex = digitIndexes[0];
+      const lastIndex = digitIndexes[digitIndexes.length - 1];
+      const text = candidateLine.chars
+        .slice(firstIndex, lastIndex + 1)
+        .map((char) => char.c)
+        .join("")
+        .trim();
+
+      addCandidate(candidates, seen, {
+        pageIndex,
+        label: "Form SSN area",
+        text,
+        rects: [estimateFormSsnFieldRect(line, labelMatch.index, labelEnd, digitChars) ?? unionRects(digitChars.map((char) => char.rect))!],
+      });
+      return;
+    }
+
+    const nearbyDigits = findNearbyDigitsForLabel(lines, line, labelMatch.index, labelEnd);
+    const digits = nearbyDigits.map((char) => char.c).join("");
+    if (nearbyDigits.length === 9 && isPlausibleSsnDigits(digits)) {
+      addCandidate(candidates, seen, {
+        pageIndex,
+        label: "Form SSN area",
+        text: nearbyDigits.map((char) => char.c).join(" "),
+        rects: [estimateFormSsnFieldRect(line, labelMatch.index, labelEnd, nearbyDigits) ?? unionRects(nearbyDigits.map((char) => char.rect))!],
+      });
+      return;
+    }
+
+    const fallbackRect = estimateFormSsnFieldRect(line, labelMatch.index, labelEnd, nearbyDigits);
+    if (fallbackRect) {
+      addCandidate(candidates, seen, {
+        pageIndex,
+        label: "Form SSN area",
+        text: "1040 SSN field area",
+        rects: [fallbackRect],
+      });
+    }
+  });
+}
+
+function estimateFormSsnFieldRect(labelLine: TextLine, labelStart: number, labelEnd: number, nearbyDigits: TextChar[]) {
+  const labelRect = unionRects(labelLine.chars.slice(labelStart, labelEnd).map((char) => char.rect));
+  if (!labelRect) return null;
+
+  const digitRect = unionRects(nearbyDigits.map((char) => char.rect));
+  if (digitRect && nearbyDigits.length >= 3) {
+    const sortedDigits = [...nearbyDigits].sort((a, b) => a.rect.x - b.rect.x);
+    const digitWidths = sortedDigits.map((char) => char.rect.width).filter((width) => width > 0);
+    const medianDigitWidth = median(digitWidths) ?? Math.max(6, digitRect.width / Math.max(nearbyDigits.length, 1));
+    const centers = sortedDigits.map((char) => char.rect.x + char.rect.width / 2);
+    const gaps = centers
+      .slice(1)
+      .map((center, index) => center - centers[index])
+      .filter((gap) => gap > medianDigitWidth * 0.8);
+    const cellPitch = Math.min(Math.max(median(gaps) ?? medianDigitWidth * 1.9, medianDigitWidth * 1.4), medianDigitWidth * 4.5);
+    const missingCells = Math.max(0, 9 - nearbyDigits.length);
+    const padX = Math.max(10, cellPitch * (missingCells + 1.2));
+    const padY = Math.max(5, digitRect.height * 0.45);
+    return {
+      x: digitRect.x - padX,
+      y: digitRect.y - padY,
+      width: digitRect.width + padX * 2,
+      height: digitRect.height + padY * 2,
+    };
+  }
+
+  return {
+    x: labelRect.x - 10,
+    y: labelRect.y - 50,
+    width: Math.max(labelRect.width + 180, 240),
+    height: Math.max(labelRect.height + 62, 72),
+  };
+}
+
+function findNearbyDigitsForLabel(lines: TextLine[], labelLine: TextLine, labelStart: number, labelEnd: number) {
+  const labelRect = unionRects(labelLine.chars.slice(labelStart, labelEnd).map((char) => char.rect));
+  if (!labelRect) return [];
+
+  const candidates = lines
+    .flatMap((line) => line.chars)
+    .filter((char) => /\d/.test(char.c))
+    .filter((char) => {
+      const centerX = char.rect.x + char.rect.width / 2;
+      const centerY = char.rect.y + char.rect.height / 2;
+      return (
+        centerX >= labelRect.x - 24 &&
+        centerX <= labelRect.x + labelRect.width + 260 &&
+        centerY >= labelRect.y - 90 &&
+        centerY <= labelRect.y + labelRect.height + 90
+      );
+    });
+
+  const rows = new Map<number, TextChar[]>();
+  for (const candidate of candidates) {
+    const rowKey = Math.round((candidate.rect.y + candidate.rect.height / 2) / 6);
+    rows.set(rowKey, [...(rows.get(rowKey) ?? []), candidate]);
+  }
+
+  const labelCenterY = labelRect.y + labelRect.height / 2;
+  const bestRow = [...rows.values()].sort((a, b) => {
+    const countDiff = b.length - a.length;
+    if (countDiff !== 0) return countDiff;
+    const aY = rowCenterY(a);
+    const bY = rowCenterY(b);
+    return Math.abs(aY - labelCenterY) - Math.abs(bY - labelCenterY);
+  })[0];
+
+  return (bestRow ?? []).sort((a, b) => a.rect.x - b.rect.x).slice(0, 9);
+}
+
+function rowCenterY(chars: TextChar[]) {
+  if (chars.length === 0) return 0;
+  return chars.reduce((sum, char) => sum + char.rect.y + char.rect.height / 2, 0) / chars.length;
+}
+
+function median(values: number[]) {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
+}
+
+function unionRects(rects: Rect[]) {
+  if (rects.length === 0) return null;
+  const minX = Math.min(...rects.map((rect) => rect.x));
+  const minY = Math.min(...rects.map((rect) => rect.y));
+  const maxX = Math.max(...rects.map((rect) => rect.x + rect.width));
+  const maxY = Math.max(...rects.map((rect) => rect.y + rect.height));
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+}
+
+function addHomeAddressLineCandidates(
+  pageIndex: number,
+  lines: TextLine[],
+  candidates: RedactionCandidate[],
+  seen: Set<string>,
+) {
+  lines.forEach((line, index) => {
+    const normalized = line.text.toLowerCase();
+    if (!normalized.includes("home address")) return;
+
+    const sameLineCandidate = lineAfterLabel(line, /home\s+address(?:\s*\([^)]*\))?/i);
+    if (sameLineCandidate && isLikelyAddressValue(sameLineCandidate.text)) {
+      addHomeAddressCandidate(pageIndex, sameLineCandidate.text, sameLineCandidate.rects, candidates, seen);
+    }
+
+    const nearbyOrderedLines = [
+      ...lines.slice(Math.max(0, index - 2), index).reverse(),
+      ...lines.slice(index + 1, index + 3),
+      ...findSpatialAddressLines(lines, line),
+    ];
+
+    for (const nextLine of nearbyOrderedLines) {
+      const text = cleanAddressCandidateText(nextLine.text);
+      if (!isLikelyAddressValue(text)) continue;
+      addHomeAddressCandidate(pageIndex, text, nextLine.chars.map((char) => char.rect), candidates, seen);
+      break;
+    }
+  });
+}
+
+function addHomeAddressCandidate(
+  pageIndex: number,
+  text: string,
+  rects: Rect[],
+  candidates: RedactionCandidate[],
+  seen: Set<string>,
+) {
+  const addressRect = unionRects(rects);
+  if (!addressRect) return;
+
+  addCandidate(candidates, seen, {
+    pageIndex,
+    label: "Home address",
+    text,
+    rects: [padRect(addressRect, 4, 3)],
+  });
+}
+
+function padRect(rect: Rect, padX: number, padY: number) {
+  return {
+    x: rect.x - padX,
+    y: rect.y - padY,
+    width: rect.width + padX * 2,
+    height: rect.height + padY * 2,
+  };
+}
+
+function findSpatialAddressLines(lines: TextLine[], labelLine: TextLine) {
+  const labelRect = lineRect(labelLine);
+  if (!labelRect) return [];
+
+  return lines
+    .filter((line) => line !== labelLine)
+    .filter((line) => {
+      const rect = lineRect(line);
+      if (!rect) return false;
+      const centerY = rect.y + rect.height / 2;
+      const overlapsX = rect.x + rect.width >= labelRect.x - 20 && rect.x <= labelRect.x + labelRect.width + 420;
+      const nearY = centerY >= labelRect.y - 70 && centerY <= labelRect.y + labelRect.height + 35;
+      return overlapsX && nearY;
+    })
+    .sort((a, b) => {
+      const aRect = lineRect(a);
+      const bRect = lineRect(b);
+      if (!aRect || !bRect) return 0;
+      const aDistance = Math.abs(aRect.y + aRect.height / 2 - (labelRect.y - 18));
+      const bDistance = Math.abs(bRect.y + bRect.height / 2 - (labelRect.y - 18));
+      return aDistance - bDistance;
+    });
+}
+
+function lineRect(line: TextLine) {
+  return unionRects(line.chars.map((char) => char.rect));
+}
+
+function collectDigitIndexes(line: TextLine, startIndex: number) {
+  const indexes: number[] = [];
+  for (let index = Math.max(0, startIndex); index < line.chars.length; index += 1) {
+    if (/\d/.test(line.chars[index].c)) {
+      indexes.push(index);
+    }
+  }
+  return indexes;
+}
+
+function lineAfterLabel(line: TextLine, labelPattern: RegExp) {
+  const match = line.text.match(labelPattern);
+  if (!match || match.index === undefined) return null;
+  const start = match.index + match[0].length;
+  const chars = line.chars.slice(start).filter((char) => char.c.trim());
+  const text = chars.map((char) => char.c).join("").trim();
+  if (!text) return null;
+  return {
+    text,
+    rects: chars.map((char) => char.rect),
+  };
+}
+
+function isLikelyAddressValue(text: string) {
+  const normalized = text.trim().toLowerCase();
+  if (normalized.length < 5) return false;
+  if (!/\d/.test(normalized)) return false;
+  if (/\b(?:city|town|state|zip|foreign|presidential|campaign|instructions?)\b/.test(normalized)) return false;
+  if (normalized.includes("home address")) return false;
+  return /[a-z]/i.test(normalized);
+}
+
+function cleanAddressCandidateText(text: string) {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function isPlausiblePatternTerm(pattern: PatternDefinition, term: string) {
+  if (!["ssn", "form-ssn"].includes(pattern.id)) return true;
+  const digits = term.replace(/\D/g, "");
+  if (digits.length !== 9) return true;
+  return isPlausibleSsnDigits(digits);
+}
+
+function isPlausibleSsnDigits(digits: string) {
+  const area = digits.slice(0, 3);
+  const group = digits.slice(3, 5);
+  const serial = digits.slice(5);
+  return digits.length === 9 && area !== "000" && area !== "666" && !area.startsWith("9") && group !== "00" && serial !== "0000";
+}
+
+function renderPagePreviews(document: any): PagePreview[] {
+  const previews: PagePreview[] = [];
+  const pageCount = document.countPages();
+
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+    const page = document.loadPage(pageIndex);
+    const bounds = page.getBounds() as [number, number, number, number];
+    const pixmap = page.toPixmap(mupdf.Matrix.scale(RENDER_SCALE, RENDER_SCALE), mupdf.ColorSpace.DeviceRGB, false, true);
+    const pngBytes = toUint8Array(pixmap.asPNG());
+    const imageUrl = URL.createObjectURL(new Blob([pngBytes], { type: "image/png" }));
+    previews.push({
+      pageIndex,
+      width: pixmap.getWidth(),
+      height: pixmap.getHeight(),
+      bounds,
+      imageUrl,
+    });
+  }
+
+  return previews;
+}
+
+async function downloadRedactedPdf() {
+  if (!state.originalBytes || !state.file) return;
+
+  setBusy(true);
+  await nextFrame();
+
+  try {
+    const outputBytes = generateRedactedPdf();
+    const remainingTerms = findRemainingSearchableTerms(outputBytes);
+    if (remainingTerms.length > 0) {
+      throw new Error(
+        `Redaction incomplete. These selected values are still searchable in the output PDF: ${remainingTerms
+          .map(maskCandidateText)
+          .join(", ")}`,
+      );
+    }
+    await savePdf(outputBytes, redactedFileName(state.file.name));
+  } catch (error) {
+    showError(error);
+  } finally {
+    setBusy(false);
+  }
+}
+
+function generateRedactedPdf() {
+  const document = openPdfFromOriginal();
+  bakeFormFields(document);
+  const byPage = new Map<number, RedactionCandidate[]>();
+
+  for (const candidate of selectedCandidates()) {
+    const group = byPage.get(candidate.pageIndex) ?? [];
+    group.push(candidate);
+    byPage.set(candidate.pageIndex, group);
+  }
+
+  for (const [pageIndex, candidates] of byPage.entries()) {
+    const page = document.loadPage(pageIndex);
+    for (const candidate of candidates) {
+      for (const rect of candidate.rects) {
+        const annotation = page.createAnnotation("Redact");
+        annotation.setRect([rect.x, rect.y, rect.x + rect.width, rect.y + rect.height]);
+      }
+    }
+    page.applyRedactions(
+      true,
+      mupdf.PDFPage.REDACT_IMAGE_PIXELS,
+      mupdf.PDFPage.REDACT_LINE_ART_REMOVE_IF_COVERED,
+      mupdf.PDFPage.REDACT_TEXT_REMOVE,
+    );
+  }
+
+  return toUint8Array(document.saveToBuffer("garbage=deduplicate,compress=yes,compress-images=yes"));
+}
+
+function bakeFormFields(document: any) {
+  if (typeof document.bake === "function") {
+    document.bake(false, true);
+  }
+}
+
+function findRemainingSearchableTerms(pdfBytes: Uint8Array<ArrayBuffer>) {
+  const document = new mupdf.PDFDocument(pdfBytes.slice());
+  const remaining = new Set<string>();
+
+  for (const candidate of selectedCandidates()) {
+    if (candidate.label === "Manual box" || candidate.label === "Form SSN area") continue;
+    const term = candidate.text.trim();
+    if (!term) continue;
+    const page = document.loadPage(candidate.pageIndex);
+    if (page.search(term, 1).length > 0) {
+      remaining.add(term);
+    }
+  }
+
+  return [...remaining];
+}
+
+function openPdfFromOriginal() {
+  if (!state.originalBytes) {
+    throw new Error("No PDF loaded");
+  }
+  return new mupdf.PDFDocument(state.originalBytes.slice());
+}
+
+function quadToRect(quad: number[]): Rect {
+  const xs = [quad[0], quad[2], quad[4], quad[6]];
+  const ys = [quad[1], quad[3], quad[5], quad[7]];
+  const minX = Math.min(...xs) - REDACTION_PADDING_POINTS;
+  const minY = Math.min(...ys) - REDACTION_PADDING_POINTS;
+  const maxX = Math.max(...xs) + REDACTION_PADDING_POINTS;
+  const maxY = Math.max(...ys) + REDACTION_PADDING_POINTS;
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
+}
+
+function renderCandidateList() {
+  if (!state.file) {
+    return `<div class="empty">Choose a PDF to begin.</div>`;
+  }
+  if (state.candidates.length === 0 && !state.busy) {
+    return `<div class="empty">No candidates yet. Try enabling more patterns or adding a custom term.</div>`;
+  }
+
+  return `
+    <div class="candidate-list">
+      ${state.candidates
+        .map(
+          (candidate) => `
+            <div class="candidate-row">
+              <label class="candidate-check">
+                <input type="checkbox" data-candidate="${candidate.id}" ${candidate.selected ? "checked" : ""} />
+                <span class="candidate-type">${escapeHtml(candidate.label)}</span>
+                <span class="candidate-text">${escapeHtml(maskCandidateText(candidate.text))}</span>
+                <span class="candidate-page">Page ${candidate.pageIndex + 1}</span>
+              </label>
+              ${
+                candidate.label === "Manual box"
+                  ? `<button class="remove-manual" type="button" data-remove-manual="${candidate.id}">Remove</button>`
+                  : ""
+              }
+            </div>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderPreviews() {
+  if (state.previews.length === 0) return "";
+
+  return `
+    <div class="pages">
+      ${state.previews
+        .map((preview) => {
+          const pageCandidates = state.candidates.filter((candidate) => candidate.pageIndex === preview.pageIndex);
+          return `
+            <article class="page-card">
+              <div class="page-title">Page ${preview.pageIndex + 1}</div>
+              <div class="page-canvas ${state.drawMode ? "draw-enabled" : ""}" data-page-index="${preview.pageIndex}" style="width:min(${preview.width}px, 100%); aspect-ratio:${preview.width} / ${preview.height}">
+                <img src="${preview.imageUrl}" alt="Page ${preview.pageIndex + 1} preview" />
+                ${pageCandidates.flatMap((candidate) => candidate.rects.map((rect) => renderOverlay(preview, candidate, rect))).join("")}
+              </div>
+            </article>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderOverlay(preview: PagePreview, candidate: RedactionCandidate, rect: Rect) {
+  const [leftBound, topBound, rightBound, bottomBound] = preview.bounds;
+  const scaleX = preview.width / (rightBound - leftBound);
+  const scaleY = preview.height / (bottomBound - topBound);
+  const left = ((rect.x - leftBound) * scaleX * 100) / preview.width;
+  const top = ((rect.y - topBound) * scaleY * 100) / preview.height;
+  const width = (rect.width * scaleX * 100) / preview.width;
+  const height = (rect.height * scaleY * 100) / preview.height;
+
+  return `
+    <div
+      class="redaction-overlay ${candidate.selected ? "selected" : "unselected"}"
+      title="${escapeHtml(candidate.label)}: ${escapeHtml(maskCandidateText(candidate.text))}"
+      style="left:${left}%; top:${top}%; width:${width}%; height:${height}%"
+    >
+      <div class="overlay-tooltip">
+        <span>${escapeHtml(candidate.label)}</span>
+        <button type="button" data-toggle-overlay="${candidate.id}">${candidate.selected ? "Exclude" : "Include"}</button>
+        ${
+          candidate.label === "Manual box"
+            ? `<button type="button" data-remove-overlay="${candidate.id}">Remove</button>`
+            : ""
+        }
+      </div>
+    </div>
+  `;
+}
+
+function selectedCandidates() {
+  return state.candidates.filter((candidate) => candidate.selected);
+}
+
+async function savePdf(bytes: Uint8Array<ArrayBuffer>, suggestedName: string) {
+  const blob = new Blob([bytes], { type: "application/pdf" });
+
+  if (window.showSaveFilePicker) {
+    const handle = await window.showSaveFilePicker({
+      suggestedName,
+      types: [{ description: "PDF", accept: { "application/pdf": [".pdf"] } }],
+    });
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return;
+  }
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = suggestedName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function setBusy(busy: boolean) {
+  state.busy = busy;
+  render();
+}
+
+function revokePreviewUrls() {
+  for (const preview of state.previews) {
+    URL.revokeObjectURL(preview.imageUrl);
+  }
+}
+
+function toUint8Array(buffer: unknown): Uint8Array<ArrayBuffer> {
+  if (buffer instanceof Uint8Array) return copyBytes(buffer);
+  if (buffer instanceof ArrayBuffer) return new Uint8Array(buffer);
+  if (typeof buffer === "object" && buffer && "asUint8Array" in buffer) {
+    return copyBytes((buffer as { asUint8Array: () => Uint8Array<ArrayBufferLike> }).asUint8Array());
+  }
+  return copyBytes(new Uint8Array(buffer as ArrayBufferLike));
+}
+
+function copyBytes(bytes: Uint8Array<ArrayBufferLike>): Uint8Array<ArrayBuffer> {
+  const copy = new Uint8Array(bytes.length);
+  copy.set(bytes);
+  return copy;
+}
+
+function rectKey(rect: Rect) {
+  return [rect.x, rect.y, rect.width, rect.height].map((value) => Math.round(value * 10) / 10).join(",");
+}
+
+function redactedFileName(fileName: string) {
+  const withoutPdf = fileName.replace(/\.pdf$/i, "");
+  return `${withoutPdf}.redacted.pdf`;
+}
+
+function maskCandidateText(text: string) {
+  if (text.length <= 4) return "*".repeat(text.length);
+  return `${"*".repeat(Math.min(6, text.length - 4))}${text.slice(-4)}`;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function showError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  window.alert(`PDF redaction failed: ${message}`);
+}
+
+function nextFrame() {
+  return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+}
