@@ -490,6 +490,15 @@ h2 {
   white-space: nowrap;
 }
 
+.overlay-tooltip::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -6px;
+  height: 6px;
+}
+
 .redaction-overlay:hover .overlay-tooltip,
 .redaction-overlay:focus-within .overlay-tooltip {
   display: flex;
