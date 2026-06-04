@@ -373,15 +373,42 @@ function wireEvents() {
   });
 
   document.querySelectorAll<HTMLElement>("[data-jump-to]").forEach((row) => {
+    const candidateId = row.dataset.jumpTo;
+    if (!candidateId) return;
+
     row.addEventListener("click", (event) => {
       if ((event.target as HTMLElement).closest("input,button")) return;
-      const candidateId = row.dataset.jumpTo;
-      if (!candidateId) return;
       const overlay = document.getElementById(`overlay-${candidateId}-0`);
       if (!overlay) return;
       overlay.scrollIntoView({ behavior: "smooth", block: "center" });
       overlay.classList.add("overlay-highlighted");
       overlay.addEventListener("animationend", () => overlay.classList.remove("overlay-highlighted"), { once: true });
+    });
+
+    row.addEventListener("mouseenter", () => {
+      document.querySelectorAll<HTMLElement>(`[id^="overlay-${candidateId}-"]`).forEach((el) => {
+        el.classList.add("overlay-hover");
+      });
+    });
+
+    row.addEventListener("mouseleave", () => {
+      document.querySelectorAll<HTMLElement>(`[id^="overlay-${candidateId}-"]`).forEach((el) => {
+        el.classList.remove("overlay-hover");
+      });
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>("[id^='overlay-']").forEach((overlay) => {
+    const match = overlay.id.match(/^overlay-(.+)-\d+$/);
+    if (!match) return;
+    const candidateId = match[1];
+
+    overlay.addEventListener("mouseenter", () => {
+      document.querySelector(`[data-jump-to="${candidateId}"]`)?.classList.add("candidate-row-hover");
+    });
+
+    overlay.addEventListener("mouseleave", () => {
+      document.querySelector(`[data-jump-to="${candidateId}"]`)?.classList.remove("candidate-row-hover");
     });
   });
 

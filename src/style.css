@@ -562,6 +562,15 @@ h2 {
   z-index: 4;
 }
 
+.overlay-hover {
+  outline: 2px solid #d24a2f;
+  z-index: 4;
+}
+
+.candidate-row-hover {
+  background: #fdf0ed !important;
+}
+
 .manual-draft {
   position: absolute;
   border: 2px dashed #245c3a;
