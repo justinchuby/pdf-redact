@@ -909,6 +909,47 @@ function rowCenterY(chars: TextChar[]) {
   return chars.reduce((sum, char) => sum + char.rect.y + char.rect.height / 2, 0) / chars.length;
 }
 
+// Collects the name+address block beneath a "name, address, and ZIP code"
+// label using geometry (multi-column form headers interleave columns in the
+// structured-text stream, so reading order is unreliable). Takes lines whose
+// horizontal span sits within the label's left column and whose vertical
+// position is just below the label, then keeps the contiguous run until a
+// different form field begins.
+function collectNameAddressBlock(lines: TextLine[], labelLine: TextLine): TextLine[] {
+  const labelRect = lineRect(labelLine);
+  if (!labelRect) return [];
+
+  const labelBottom = labelRect.y + labelRect.height;
+  const columnRight = labelRect.x + labelRect.width + 30;
+  const maxDrop = labelRect.height * 7;
+
+  const below = lines
+    .filter((line) => line !== labelLine && line.chars.length > 0)
+    .map((line) => ({ line, rect: lineRect(line) }))
+    .filter((entry): entry is { line: TextLine; rect: Rect } => entry.rect !== null)
+    .filter(({ rect }) => {
+      const startsBelow = rect.y >= labelBottom - labelRect.height * 0.4;
+      const withinDrop = rect.y <= labelBottom + maxDrop;
+      const inColumn = rect.x >= labelRect.x - 12 && rect.x <= columnRight;
+      return startsBelow && withinDrop && inColumn;
+    })
+    .sort((a, b) => a.rect.y - b.rect.y);
+
+  const block: TextLine[] = [];
+  let prevBottom: number | null = null;
+  for (const { line, rect } of below) {
+    if (isBlockBoundaryLine(cleanAddressCandidateText(line.text))) break;
+    if (prevBottom !== null) {
+      const gap = rect.y - prevBottom;
+      if (gap > rect.height * 1.6) break;
+    }
+    block.push(line);
+    prevBottom = rect.y + rect.height;
+    if (block.length >= 4) break;
+  }
+  return block;
+}
+
 function addHomeAddressLineCandidates(
   pageIndex: number,
   lines: TextLine[],
@@ -920,23 +961,11 @@ function addHomeAddressLineCandidates(
 
     // W-2 box c / 1099 payer blocks: the label covers NAME + address. Cover the
     // contiguous block of lines directly below the label (employer/payer name,
-    // street, city/state/ZIP) until a different form field begins.
+    // street, city/state/ZIP) until a different form field begins. Select lines
+    // by GEOMETRY, not reading order, because multi-column form headers
+    // interleave columns in the structured-text stream.
     if (isNameAddressLabel(line.text)) {
-      const labelRect = lineRect(line);
-      const blockLines: TextLine[] = [];
-      for (let i = index + 1; i < lines.length && blockLines.length < 4; i += 1) {
-        const next = lines[i];
-        const text = cleanAddressCandidateText(next.text);
-        if (isBlockBoundaryLine(text)) break;
-        // Keep only lines spatially below and roughly aligned with the label.
-        const rect = lineRect(next);
-        if (labelRect && rect) {
-          const below = rect.y >= labelRect.y - 2;
-          const alignedX = rect.x <= labelRect.x + labelRect.width + 40 && rect.x + rect.width >= labelRect.x - 12;
-          if (!below || !alignedX) continue;
-        }
-        blockLines.push(next);
-      }
+      const blockLines = collectNameAddressBlock(lines, line);
       if (blockLines.length > 0) {
         const text = blockLines.map((bl) => cleanAddressCandidateText(bl.text)).join(", ");
         const rects = blockLines.flatMap((bl) => bl.chars.map((char) => char.rect));
