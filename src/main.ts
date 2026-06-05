@@ -11,7 +11,6 @@ import {
   TAX_LABEL_RE,
   cleanAddressCandidateText,
   escapeHtml,
-  groupAdjacentRows,
   isAddressLabelLine,
   isBlockBoundaryLine,
   isLikelyAddressValue,
@@ -771,11 +770,45 @@ function addLineBasedCandidates(
 ) {
   if (state.enabledPatternIds.has("form-ssn")) {
     addFormSsnLineCandidates(pageIndex, lines, candidates, seen);
+    addCellSsnCandidates(pageIndex, lines, candidates, seen);
   }
 
   if (state.enabledPatternIds.has("home-address")) {
     addHomeAddressLineCandidates(pageIndex, lines, candidates, seen);
   }
+}
+
+// Detects SSNs printed as nine individually-boxed digits (e.g. dependent SSN
+// rows like "4 4 4 4 4 4 4 4 4"), which the plain SSN regex can't match and
+// which may sit under a label that wraps across lines. A row qualifies when its
+// only non-space characters are exactly nine digits forming a plausible SSN.
+// Skipped if the location is already covered (e.g. by the Form SSN area pass).
+function addCellSsnCandidates(
+  pageIndex: number,
+  lines: TextLine[],
+  candidates: RedactionCandidate[],
+  seen: Set<string>,
+) {
+  for (const line of lines) {
+    const nonSpace = line.chars.filter((char) => char.c.trim());
+    if (nonSpace.length !== 9) continue;
+    if (!nonSpace.every((char) => /\d/.test(char.c))) continue;
+    const digits = nonSpace.map((char) => char.c).join("");
+    if (!isPlausibleSsnDigits(digits)) continue;
+    const rect = unionRects(nonSpace.map((char) => char.rect));
+    if (!rect) continue;
+    const padded = padRect(rect, 2, 2);
+    if (candidateRectsOverlap([padded], candidates, pageIndex)) continue;
+    addCandidate(candidates, seen, { pageIndex, label: "SSN", text: digits, rects: [padded] });
+  }
+}
+
+function candidateRectsOverlap(rects: Rect[], candidates: RedactionCandidate[], pageIndex: number) {
+  return candidates.some(
+    (candidate) =>
+      candidate.pageIndex === pageIndex &&
+      candidate.rects.some((cr) => rects.some((r) => rectsOverlap(cr, r))),
+  );
 }
 
 // Orders the lines to search for an SSN label's digit row by GEOMETRY rather
@@ -813,7 +846,10 @@ function addFormSsnLineCandidates(
   candidates: RedactionCandidate[],
   seen: Set<string>,
 ) {
-  const labelPattern = new RegExp(`\\b(?:your|spouse${APOS}s?)\\s+social\\s+security\\s+number\\b`, "i");
+  // Match the core label phrase so Your / Spouse's / dependent "(2) Social
+  // security number" fields are all covered. "Social security benefits" (an
+  // income line) is excluded because it lacks "number".
+  const labelPattern = /\bsocial\s+security\s+number\b/i;
 
   lines.forEach((line, index) => {
     const labelMatch = line.text.match(labelPattern);
@@ -1028,32 +1064,22 @@ function addHomeAddressLineCandidates(
       );
     }
 
-    const nearbyOrderedLines = [
-      ...lines.slice(Math.max(0, index - 2), index).reverse(),
+    // Each address-looking line near the label gets its own tight box. We avoid
+    // merging across a row or pulling in continuation lines, because on dense
+    // forms (e.g. the 1040 City/State/ZIP row) that risks covering unrelated
+    // columns that happen to share the same baseline.
+    const nearby = [
+      ...lines.slice(Math.max(0, index - 2), index),
       ...lines.slice(index + 1, index + 3),
       ...findSpatialAddressLines(lines, line),
     ];
-
-    const valueLines: TextLine[] = [];
     const seenLines = new Set<TextLine>();
-    for (const nextLine of nearbyOrderedLines) {
-      if (seenLines.has(nextLine)) continue;
+    for (const nextLine of nearby) {
+      if (nextLine === line || seenLines.has(nextLine)) continue;
       seenLines.add(nextLine);
       const text = cleanAddressCandidateText(nextLine.text);
       if (!isLikelyAddressValue(text)) continue;
-      valueLines.push(nextLine);
-    }
-    if (valueLines.length === 0) return;
-
-    const rows = valueLines.map((valueLine) => {
-      const rect = lineRect(valueLine);
-      return { y: rect?.y ?? 0, height: rect?.height ?? 0 };
-    });
-
-    for (const group of groupAdjacentRows(rows)) {
-      const groupLines = group.map((i) => valueLines[i]);
-      const text = groupLines.map((groupLine) => cleanAddressCandidateText(groupLine.text)).join(", ");
-      addHomeAddressCandidate(pageIndex, text, groupLines, candidates, seen);
+      addHomeAddressCandidate(pageIndex, text, [nextLine], candidates, seen);
     }
   });
 }
