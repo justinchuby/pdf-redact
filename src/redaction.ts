@@ -7,6 +7,11 @@ export type Rect = {
 
 export const REDACTION_PADDING_POINTS = 1.5;
 
+// Matches an optional possessive apostrophe in form labels, accepting both the
+// ASCII apostrophe (') and the typographic right single quote (U+2019) that
+// tax forms like the 1040 actually print (e.g. "Spouse's", "PAYER'S").
+export const APOS = "['\u2019]?";
+
 export function redactedFileName(fileName: string) {
   const withoutPdf = fileName.replace(/\.pdf$/i, "");
   return `${withoutPdf}.redacted.pdf`;
@@ -119,11 +124,10 @@ export function isAddressLabelLine(text: string) {
   if (!normalized.includes("address")) return false;
   if (/\b(?:home|street|mailing)\s+address\b/.test(normalized)) return true;
   if (/\baddress\s+and\s+zip\b/.test(normalized)) return true;
-  if (
-    /\b(?:employee|employer|recipient|payer|spouse|borrower|lender|filer|student)['\u2019]?s?\b[^.]{0,40}\baddress\b/.test(
-      normalized,
-    )
-  ) {
+  const partyAddress = new RegExp(
+    `\\b(?:employee|employer|recipient|payer|spouse|borrower|lender|filer|student)${APOS}s?\\b[^.]{0,40}\\baddress\\b`,
+  );
+  if (partyAddress.test(normalized)) {
     return true;
   }
   return false;
@@ -150,11 +154,10 @@ export function isBlockBoundaryLine(text: string) {
   if (normalized.length === 0) return true;
   const lower = normalized.toLowerCase();
   if (/[$]/.test(normalized)) return true;
-  if (
-    /\b(?:wages?|tax(?:able)?|compensation|tips?|income|withheld|withholding|ein|ssn|i?tin|control\s+number|employee['\u2019]?s?\b|social\s+security|medicare|state\s+income|federal\s+income|box\s+\d+)\b/.test(
-      lower,
-    )
-  ) {
+  const boundary = new RegExp(
+    `\\b(?:wages?|tax(?:able)?|compensation|tips?|income|withheld|withholding|ein|ssn|i?tin|control\\s+number|employee${APOS}s?\\b|social\\s+security|medicare|state\\s+income|federal\\s+income|box\\s+\\d+)\\b`,
+  );
+  if (boundary.test(lower)) {
     return true;
   }
   return false;
@@ -247,5 +250,11 @@ export const PHONE_RE =
 // 9-digit taxpayer IDs (SSN/EIN/ITIN/TIN) that appear right after an
 // identifying label. Covers the label vocabulary used across W-2, the 1099
 // series (PAYER'S / RECIPIENT'S TIN, federal identification number), 1098, etc.
-export const TAX_LABEL_RE =
-  /\b(?:ssn|social\s+security(?:\s+(?:number|no\.?))?|i?tin|taxpayer\s+id(?:entification)?(?:\s+(?:no\.?|number))?|tax\s+id|ein|employer\s+identification\s+(?:number|no\.?)|payer['\u2019]?s?\s+(?:tin|fed(?:eral)?\.?\s*id(?:entification)?(?:\s+(?:no\.?|number))?)|recipient['\u2019]?s?\s+(?:tin|id(?:entification)?(?:\s+(?:no\.?|number))?)|federal\s+identification\s+(?:number|no\.?)|fed\.?\s*id\.?\s*(?:no\.?)?)\b[^\d]{0,80}(\d{2,3}[-\s]?\d{2}[-\s]?\d{4,7})(?!\d)/gi;
+export const TAX_LABEL_RE = new RegExp(
+  "\\b(?:ssn|social\\s+security(?:\\s+(?:number|no\\.?))?|i?tin|taxpayer\\s+id(?:entification)?(?:\\s+(?:no\\.?|number))?|tax\\s+id|ein|employer\\s+identification\\s+(?:number|no\\.?)|payer" +
+    APOS +
+    "s?\\s+(?:tin|fed(?:eral)?\\.?\\s*id(?:entification)?(?:\\s+(?:no\\.?|number))?)|recipient" +
+    APOS +
+    "s?\\s+(?:tin|id(?:entification)?(?:\\s+(?:no\\.?|number))?)|federal\\s+identification\\s+(?:number|no\\.?)|fed\\.?\\s*id\\.?\\s*(?:no\\.?)?)\\b[^\\d]{0,80}(\\d{2,3}[-\\s]?\\d{2}[-\\s]?\\d{4,7})(?!\\d)",
+  "gi",
+);
