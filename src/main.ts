@@ -942,7 +942,7 @@ function addHomeAddressCandidate(
     pageIndex,
     label: "Address",
     text,
-    rects: [padRect(addressRect, 4, 3)],
+    rects: [padRect(addressRect, 6, 5)],
   });
 }
 
@@ -1036,11 +1036,13 @@ async function downloadRedactedPdf() {
     const outputBytes = generateRedactedPdf();
     const remainingTerms = findRemainingSearchableTerms(outputBytes);
     if (remainingTerms.length > 0) {
-      throw new Error(
-        `Redaction incomplete. These selected values are still searchable in the output PDF: ${remainingTerms
-          .map(maskCandidateText)
-          .join(", ")}`,
+      const proceed = window.confirm(
+        `Warning: these selected values may still be searchable in the output PDF:\n\n` +
+          `${remainingTerms.map(maskCandidateText).join(", ")}\n\n` +
+          `This can happen when a redaction box does not fully cover the text. ` +
+          `Consider enlarging the box with Draw box, or click OK to download anyway.`,
       );
+      if (!proceed) return;
     }
     await savePdf(outputBytes, redactedFileName(state.file.name));
   } catch (error) {
