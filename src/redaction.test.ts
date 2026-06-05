@@ -11,7 +11,9 @@ import {
   escapeHtml,
   groupAdjacentRows,
   isAddressLabelLine,
+  isBlockBoundaryLine,
   isLikelyAddressValue,
+  isNameAddressLabel,
   isPlausibleSsnDigits,
   maskCandidateText,
   median,
@@ -373,6 +375,47 @@ describe("isAddressLabelLine", () => {
 describe("isLikelyAddressValue (label rejection)", () => {
   it("rejects lines containing the word address", () => {
     expect(isLikelyAddressValue("Employee's address and ZIP code")).toBe(false);
+  });
+});
+
+describe("isNameAddressLabel", () => {
+  it("matches the W-2 box c employer name+address label", () => {
+    expect(isNameAddressLabel("Employer's name, address, and ZIP code")).toBe(true);
+  });
+
+  it("matches a 1099 payer name+address label", () => {
+    expect(isNameAddressLabel("PAYER'S name, street address, city or town")).toBe(true);
+  });
+
+  it("does not match a plain address label", () => {
+    expect(isNameAddressLabel("Employee's address and ZIP code")).toBe(false);
+  });
+
+  it("does not match a non-address line", () => {
+    expect(isNameAddressLabel("Wages, tips, other compensation")).toBe(false);
+  });
+});
+
+describe("isBlockBoundaryLine", () => {
+  it("treats an empty line as a boundary", () => {
+    expect(isBlockBoundaryLine("")).toBe(true);
+  });
+
+  it("treats a money row as a boundary", () => {
+    expect(isBlockBoundaryLine("Wages, tips 52000.00")).toBe(true);
+    expect(isBlockBoundaryLine("$1,234.00")).toBe(true);
+  });
+
+  it("treats the employee box as a boundary", () => {
+    expect(isBlockBoundaryLine("Employee's social security number")).toBe(true);
+  });
+
+  it("does not treat an employer name as a boundary", () => {
+    expect(isBlockBoundaryLine("ACME CORPORATION")).toBe(false);
+  });
+
+  it("does not treat a street line as a boundary", () => {
+    expect(isBlockBoundaryLine("123 Industrial Pkwy")).toBe(false);
   });
 });
 

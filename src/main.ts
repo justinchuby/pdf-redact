@@ -12,7 +12,9 @@ import {
   escapeHtml,
   groupAdjacentRows,
   isAddressLabelLine,
+  isBlockBoundaryLine,
   isLikelyAddressValue,
+  isNameAddressLabel,
   isPlausibleSsnDigits,
   maskCandidateText,
   median,
@@ -915,6 +917,33 @@ function addHomeAddressLineCandidates(
 ) {
   lines.forEach((line, index) => {
     if (!isAddressLabelLine(line.text)) return;
+
+    // W-2 box c / 1099 payer blocks: the label covers NAME + address. Cover the
+    // contiguous block of lines directly below the label (employer/payer name,
+    // street, city/state/ZIP) until a different form field begins.
+    if (isNameAddressLabel(line.text)) {
+      const labelRect = lineRect(line);
+      const blockLines: TextLine[] = [];
+      for (let i = index + 1; i < lines.length && blockLines.length < 4; i += 1) {
+        const next = lines[i];
+        const text = cleanAddressCandidateText(next.text);
+        if (isBlockBoundaryLine(text)) break;
+        // Keep only lines spatially below and roughly aligned with the label.
+        const rect = lineRect(next);
+        if (labelRect && rect) {
+          const below = rect.y >= labelRect.y - 2;
+          const alignedX = rect.x <= labelRect.x + labelRect.width + 40 && rect.x + rect.width >= labelRect.x - 12;
+          if (!below || !alignedX) continue;
+        }
+        blockLines.push(next);
+      }
+      if (blockLines.length > 0) {
+        const text = blockLines.map((bl) => cleanAddressCandidateText(bl.text)).join(", ");
+        const rects = blockLines.flatMap((bl) => bl.chars.map((char) => char.rect));
+        addHomeAddressCandidate(pageIndex, text, rects, candidates, seen);
+        return;
+      }
+    }
 
     const sameLineCandidate = lineAfterLabel(
       line,

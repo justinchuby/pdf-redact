@@ -133,6 +133,33 @@ export function cleanAddressCandidateText(text: string) {
   return text.replace(/\s+/g, " ").trim();
 }
 
+// True when an address label also covers a party's NAME (e.g. W-2 box c
+// "Employer's name, address, and ZIP code" or 1099 "PAYER'S name, street
+// address, city..."). For these the name line(s) directly under the label are
+// PII too and should be covered together with the address block.
+export function isNameAddressLabel(text: string) {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized.includes("address")) return false;
+  return /\bname\b[^.]{0,60}\baddress\b/.test(normalized);
+}
+
+// True when a line clearly belongs to a different form field and should stop a
+// name+address block (e.g. a box number/label or a money/identifier row).
+export function isBlockBoundaryLine(text: string) {
+  const normalized = text.trim();
+  if (normalized.length === 0) return true;
+  const lower = normalized.toLowerCase();
+  if (/[$]/.test(normalized)) return true;
+  if (
+    /\b(?:wages?|tax(?:able)?|compensation|tips?|income|withheld|withholding|ein|ssn|i?tin|control\s+number|employee'?s?\b|social\s+security|medicare|state\s+income|federal\s+income|box\s+\d+)\b/.test(
+      lower,
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
 // Groups rows (lines) that sit on vertically-adjacent baselines so a
 // multi-line address block can be merged into a single redaction box.
 // Returns groups of the ORIGINAL indexes, each group sorted top-to-bottom.
