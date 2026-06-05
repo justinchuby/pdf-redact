@@ -15,6 +15,7 @@ import {
   isLikelyAddressValue,
   isNameAddressLabel,
   isPlausibleSsnDigits,
+  isStandardSsnText,
   maskCandidateText,
   median,
   padRect,
@@ -243,6 +244,29 @@ describe("padRect", () => {
       width: 8,
       height: 12,
     });
+  });
+});
+
+describe("isStandardSsnText", () => {
+  it("matches a hyphenated SSN", () => {
+    expect(isStandardSsnText("123-45-6789")).toBe(true);
+  });
+
+  it("matches a space-separated SSN", () => {
+    expect(isStandardSsnText("123 45 6789")).toBe(true);
+  });
+
+  it("matches a bare 9-digit SSN", () => {
+    expect(isStandardSsnText("123456789")).toBe(true);
+  });
+
+  it("rejects cell digits with wide spacing", () => {
+    expect(isStandardSsnText("1 2 3 4 5 6 7 8 9")).toBe(false);
+  });
+
+  it("rejects values with extra characters", () => {
+    expect(isStandardSsnText("SSN 123-45-6789")).toBe(false);
+    expect(isStandardSsnText("123-45-67890")).toBe(false);
   });
 });
 

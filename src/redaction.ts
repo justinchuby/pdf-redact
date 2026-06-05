@@ -204,6 +204,14 @@ export function isPlausibleSsnDigits(digits: string) {
   return digits.length === 9 && area !== "000" && area !== "666" && !area.startsWith("9") && group !== "00" && serial !== "0000";
 }
 
+// True when the text is a standard inline SSN (3-2-4 groups separated by at
+// most a single hyphen or space), i.e. the form the regular SSN pattern
+// already matches precisely. Used to avoid adding a redundant, larger
+// "Form SSN area" box on top of an already-detected hyphenated SSN.
+export function isStandardSsnText(text: string) {
+  return /^\d{3}[- ]?\d{2}[- ]?\d{4}$/.test(text.trim());
+}
+
 export function padRect(rect: Rect, padX: number, padY: number) {
   return {
     x: rect.x - padX,

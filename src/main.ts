@@ -16,6 +16,7 @@ import {
   isLikelyAddressValue,
   isNameAddressLabel,
   isPlausibleSsnDigits,
+  isStandardSsnText,
   maskCandidateText,
   median,
   padRect,
@@ -800,6 +801,12 @@ function addFormSsnLineCandidates(
         .map((char) => char.c)
         .join("")
         .trim();
+
+      // If the value is a standard inline SSN (e.g. 123-45-6789), the regular
+      // SSN pattern already covers it precisely. Skip the larger Form SSN area
+      // box to avoid redundant over-coverage; only digits spread across
+      // separate cells need the field-area estimate.
+      if (isStandardSsnText(text)) return;
 
       addCandidate(candidates, seen, {
         pageIndex,
