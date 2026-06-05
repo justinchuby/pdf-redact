@@ -13,7 +13,9 @@ import {
   isAddressLabelLine,
   isBlockBoundaryLine,
   isLikelyAddressValue,
+  isLikelyNameValue,
   isNameAddressLabel,
+  isNameLabelLine,
   isPlausibleSsnDigits,
   isStandardSsnText,
   maskCandidateText,
@@ -425,6 +427,44 @@ describe("isNameAddressLabel", () => {
 
   it("does not match a non-address line", () => {
     expect(isNameAddressLabel("Wages, tips, other compensation")).toBe(false);
+  });
+});
+
+describe("isNameLabelLine", () => {
+  it("matches first/last name labels", () => {
+    expect(isNameLabelLine("Your first name and middle initial")).toBe(true);
+    expect(isNameLabelLine("Last name")).toBe(true);
+    expect(isNameLabelLine("If joint return, spouse\u2019s first name and middle initial")).toBe(true);
+    expect(isNameLabelLine("(1) First name")).toBe(true);
+  });
+
+  it("does not match unrelated lines", () => {
+    expect(isNameLabelLine("Foreign country name")).toBe(false);
+    expect(isNameLabelLine("Wages, salaries, tips")).toBe(false);
+  });
+});
+
+describe("isLikelyNameValue", () => {
+  it("accepts plausible names", () => {
+    expect(isLikelyNameValue("Robin")).toBe(true);
+    expect(isLikelyNameValue("Brook")).toBe(true);
+    expect(isLikelyNameValue("Ariel Noble")).toBe(true);
+    expect(isLikelyNameValue("Mary-Jane O'Brien")).toBe(true);
+  });
+
+  it("rejects values with digits", () => {
+    expect(isLikelyNameValue("1519 Denson Ave")).toBe(false);
+    expect(isLikelyNameValue("222 22 2222")).toBe(false);
+  });
+
+  it("rejects form label/keyword lines", () => {
+    expect(isLikelyNameValue("Last name")).toBe(false);
+    expect(isLikelyNameValue("Home address")).toBe(false);
+    expect(isLikelyNameValue("Sample Only")).toBe(false);
+  });
+
+  it("rejects overly long text", () => {
+    expect(isLikelyNameValue("this is a very long phrase that is not a name")).toBe(false);
   });
 });
 

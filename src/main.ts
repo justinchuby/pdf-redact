@@ -14,7 +14,9 @@ import {
   isAddressLabelLine,
   isBlockBoundaryLine,
   isLikelyAddressValue,
+  isLikelyNameValue,
   isNameAddressLabel,
+  isNameLabelLine,
   isPlausibleSsnDigits,
   isStandardSsnText,
   maskCandidateText,
@@ -162,6 +164,14 @@ const PATTERNS: PatternDefinition[] = [
     description: "US phone numbers such as (555) 123-4567 or 555-123-4567",
     expression: PHONE_RE,
     group: 1,
+    defaultEnabled: true,
+  },
+  {
+    id: "name",
+    label: "Names",
+    description: "Taxpayer, spouse, and dependent names located below first/last name labels",
+    expression: /(?!)/g,
+    group: 0,
     defaultEnabled: true,
   },
 ];
@@ -775,6 +785,48 @@ function addLineBasedCandidates(
 
   if (state.enabledPatternIds.has("home-address")) {
     addHomeAddressLineCandidates(pageIndex, lines, candidates, seen);
+  }
+
+  if (state.enabledPatternIds.has("name")) {
+    addNameLineCandidates(pageIndex, lines, candidates, seen);
+  }
+}
+
+// Redacts taxpayer/spouse/dependent names. Names have no intrinsic format, so
+// they're located by geometry: for each "first name"/"last name" label, take
+// the name-looking value fragment directly below it within the label's column.
+function addNameLineCandidates(
+  pageIndex: number,
+  lines: TextLine[],
+  candidates: RedactionCandidate[],
+  seen: Set<string>,
+) {
+  for (const label of lines) {
+    if (!isNameLabelLine(label.text)) continue;
+    const labelRect = lineRect(label);
+    if (!labelRect) continue;
+    const labelBottom = labelRect.y + labelRect.height;
+
+    for (const value of lines) {
+      if (value === label) continue;
+      const rect = lineRect(value);
+      if (!rect) continue;
+      const below = rect.y >= labelBottom - labelRect.height * 0.3 && rect.y <= labelBottom + labelRect.height * 1.8;
+      if (!below) continue;
+      const center = rect.x + rect.width / 2;
+      const inColumn = center >= labelRect.x - 12 && center <= labelRect.x + labelRect.width + 12;
+      if (!inColumn) continue;
+      const text = cleanAddressCandidateText(value.text);
+      if (!isLikelyNameValue(text)) continue;
+      const tight = unionRects(value.chars.map((char) => char.rect));
+      if (!tight) continue;
+      addCandidate(candidates, seen, {
+        pageIndex,
+        label: "Name",
+        text,
+        rects: [padRect(tight, 2, 2)],
+      });
+    }
   }
 }
 

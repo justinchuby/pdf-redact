@@ -137,6 +137,33 @@ export function cleanAddressCandidateText(text: string) {
   return text.replace(/\s+/g, " ").trim();
 }
 
+// True when a line is a name *label* on a tax form, e.g. "Your first name and
+// middle initial", "Last name", "Spouse's first name", "(1) First name".
+export function isNameLabelLine(text: string) {
+  return /\b(?:first|last)\s+name\b/i.test(text);
+}
+
+// True when text looks like a person's name value (not a label): letters,
+// spaces, and common name punctuation only, a few words at most, and none of
+// the form's own vocabulary. Used to redact name fields located just below a
+// name label by geometry.
+export function isLikelyNameValue(text: string) {
+  const t = text.trim();
+  if (t.length < 2 || t.length > 40) return false;
+  if (/\d/.test(t)) return false;
+  if (!/^[A-Za-z][A-Za-z .,'\u2019-]*$/.test(t)) return false;
+  if (t.split(/\s+/).length > 4) return false;
+  const lower = t.toLowerCase();
+  if (
+    /\b(?:name|address|city|town|state|zip|first|last|middle|initial|spouse|joint|return|social|security|number|dependent|dependents|relationship|status|single|married|filing|jointly|separately|household|occupation|instructions?|form|tax|sample|only|foreign|country|province|county|postal|presidential|election|campaign|standard|deduction|wages|salaries|tips|signature|date|preparer|firm|designee|phone|email|checking|savings|routing|account)\b/.test(
+      lower,
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
 // True when an address label also covers a party's NAME (e.g. W-2 box c
 // "Employer's name, address, and ZIP code" or 1099 "PAYER'S name, street
 // address, city..."). For these the name line(s) directly under the label are
