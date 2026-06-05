@@ -153,6 +153,22 @@ describe("isLikelyAddressValue", () => {
     expect(isLikelyAddressValue("123 Main St")).toBe(true);
   });
 
+  it("accepts a city/state/ZIP line", () => {
+    expect(isLikelyAddressValue("Springfield, IL 62704")).toBe(true);
+  });
+
+  it("accepts a state + ZIP line without a comma", () => {
+    expect(isLikelyAddressValue("Springfield IL 62704")).toBe(true);
+  });
+
+  it("accepts a PO Box", () => {
+    expect(isLikelyAddressValue("PO Box 1234")).toBe(true);
+  });
+
+  it("accepts a street line with a unit", () => {
+    expect(isLikelyAddressValue("456 Oak Avenue Apt 7")).toBe(true);
+  });
+
   it("rejects values without digits", () => {
     expect(isLikelyAddressValue("Main Street")).toBe(false);
   });
@@ -167,6 +183,23 @@ describe("isLikelyAddressValue", () => {
 
   it("rejects the literal home address label", () => {
     expect(isLikelyAddressValue("home address 1")).toBe(false);
+  });
+
+  it("rejects a wage/amount row", () => {
+    expect(isLikelyAddressValue("1 Wages, tips 52000.00")).toBe(false);
+    expect(isLikelyAddressValue("Taxable income 41250")).toBe(false);
+  });
+
+  it("rejects a dollar amount", () => {
+    expect(isLikelyAddressValue("$12,345.67")).toBe(false);
+  });
+
+  it("rejects an employer name with digits but no street/zip shape", () => {
+    expect(isLikelyAddressValue("Acme Corp 2000")).toBe(false);
+  });
+
+  it("rejects a bare number-and-word fragment", () => {
+    expect(isLikelyAddressValue("Box 12 checked")).toBe(false);
   });
 });
 

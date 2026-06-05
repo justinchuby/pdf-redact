@@ -956,8 +956,8 @@ function findSpatialAddressLines(lines: TextLine[], labelLine: TextLine) {
       const rect = lineRect(line);
       if (!rect) return false;
       const centerY = rect.y + rect.height / 2;
-      const overlapsX = rect.x + rect.width >= labelRect.x - 20 && rect.x <= labelRect.x + labelRect.width + 420;
-      const nearY = centerY >= labelRect.y - 70 && centerY <= labelRect.y + labelRect.height + 35;
+      const overlapsX = rect.x + rect.width >= labelRect.x - 12 && rect.x <= labelRect.x + labelRect.width + 60;
+      const nearY = centerY >= labelRect.y - 8 && centerY <= labelRect.y + labelRect.height + 60;
       return overlapsX && nearY;
     })
     .sort((a, b) => {

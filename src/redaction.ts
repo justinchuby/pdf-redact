@@ -79,12 +79,36 @@ export function quadToRect(quad: number[]): Rect {
 }
 
 export function isLikelyAddressValue(text: string) {
-  const normalized = text.trim().toLowerCase();
+  const normalized = text.trim();
+  const lower = normalized.toLowerCase();
   if (normalized.length < 5) return false;
   if (!/\d/.test(normalized)) return false;
-  if (/\b(?:city|town|state|zip|foreign|presidential|campaign|instructions?)\b/.test(normalized)) return false;
-  if (/\baddress\b/.test(normalized)) return false;
-  return /[a-z]/i.test(normalized);
+  if (!/[a-z]/i.test(normalized)) return false;
+  if (/\baddress\b/.test(lower)) return false;
+  if (/\b(?:city|town|state|zip|foreign|presidential|campaign|instructions?)\b/.test(lower)) return false;
+  // Reject money / wage / identifier rows that happen to mix digits and letters.
+  if (/[$]/.test(normalized)) return false;
+  if (
+    /\b(?:wages?|tax(?:able)?|compensation|tips?|income|amount|total|withheld|withholding|ein|ssn|i?tin|account|routing|medicare|benefits?|deferrals?|plan)\b/.test(
+      lower,
+    )
+  ) {
+    return false;
+  }
+
+  // A street line: starts with a house number and contains a street-type word.
+  const startsWithNumber = /^\d{1,6}\b/.test(normalized);
+  const hasStreetWord =
+    /\b(?:street|avenue|boulevard|drive|lane|road|court|circle|place|terrace|highway|parkway|suite|apartment|apt|unit|ste|st|ave|blvd|dr|ln|rd|ct|cir|pl|hwy|pkwy|ter)\b/.test(
+      lower,
+    );
+  const hasPoBox = /\bp\.?\s*o\.?\s*box\s+\d+/i.test(normalized);
+  // A city/state/ZIP line: a two-letter state followed by a ZIP, or a
+  // "City, ... 12345" shape.
+  const hasStateZip = /\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/.test(normalized);
+  const hasCommaZip = /,\s*[A-Za-z .]+\s+\d{5}(?:-\d{4})?\b/.test(normalized);
+
+  return (startsWithNumber && hasStreetWord) || hasPoBox || hasStateZip || hasCommaZip;
 }
 
 // True when a line looks like an address *label* on a tax form. Covers the
