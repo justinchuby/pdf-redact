@@ -10,6 +10,7 @@ import {
   TAX_LABEL_RE,
   cleanAddressCandidateText,
   escapeHtml,
+  groupAdjacentRows,
   isAddressLabelLine,
   isLikelyAddressValue,
   isPlausibleSsnDigits,
@@ -902,11 +903,27 @@ function addHomeAddressLineCandidates(
       ...findSpatialAddressLines(lines, line),
     ];
 
+    const valueLines: TextLine[] = [];
+    const seenLines = new Set<TextLine>();
     for (const nextLine of nearbyOrderedLines) {
+      if (seenLines.has(nextLine)) continue;
+      seenLines.add(nextLine);
       const text = cleanAddressCandidateText(nextLine.text);
       if (!isLikelyAddressValue(text)) continue;
-      addHomeAddressCandidate(pageIndex, text, nextLine.chars.map((char) => char.rect), candidates, seen);
-      break;
+      valueLines.push(nextLine);
+    }
+    if (valueLines.length === 0) return;
+
+    const rows = valueLines.map((valueLine) => {
+      const rect = lineRect(valueLine);
+      return { y: rect?.y ?? 0, height: rect?.height ?? 0 };
+    });
+
+    for (const group of groupAdjacentRows(rows)) {
+      const groupLines = group.map((i) => valueLines[i]);
+      const text = groupLines.map((groupLine) => cleanAddressCandidateText(groupLine.text)).join(", ");
+      const rects = groupLines.flatMap((groupLine) => groupLine.chars.map((char) => char.rect));
+      addHomeAddressCandidate(pageIndex, text, rects, candidates, seen);
     }
   });
 }

@@ -109,6 +109,43 @@ export function cleanAddressCandidateText(text: string) {
   return text.replace(/\s+/g, " ").trim();
 }
 
+// Groups rows (lines) that sit on vertically-adjacent baselines so a
+// multi-line address block can be merged into a single redaction box.
+// Returns groups of the ORIGINAL indexes, each group sorted top-to-bottom.
+// Two rows are adjacent when the vertical gap between them is no larger than
+// maxGapFactor times the typical row height.
+export function groupAdjacentRows(
+  rows: { y: number; height: number }[],
+  maxGapFactor = 1.4,
+): number[][] {
+  const order = rows.map((_, index) => index).sort((a, b) => rows[a].y - rows[b].y);
+
+  const groups: number[][] = [];
+  let current: number[] = [];
+
+  for (const index of order) {
+    const row = rows[index];
+    if (current.length === 0) {
+      current = [index];
+      continue;
+    }
+
+    const prev = rows[current[current.length - 1]];
+    const gap = row.y - (prev.y + prev.height);
+    const reference = Math.max(prev.height, row.height, 1);
+
+    if (gap <= reference * maxGapFactor) {
+      current.push(index);
+    } else {
+      groups.push(current);
+      current = [index];
+    }
+  }
+
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
+
 export function isPlausibleSsnDigits(digits: string) {
   const area = digits.slice(0, 3);
   const group = digits.slice(3, 5);

@@ -9,6 +9,7 @@ import {
   TAX_LABEL_RE,
   cleanAddressCandidateText,
   escapeHtml,
+  groupAdjacentRows,
   isAddressLabelLine,
   isLikelyAddressValue,
   isPlausibleSsnDigits,
@@ -339,5 +340,49 @@ describe("isAddressLabelLine", () => {
 describe("isLikelyAddressValue (label rejection)", () => {
   it("rejects lines containing the word address", () => {
     expect(isLikelyAddressValue("Employee's address and ZIP code")).toBe(false);
+  });
+});
+
+describe("groupAdjacentRows", () => {
+  it("groups two vertically-adjacent lines together", () => {
+    const rows = [
+      { y: 100, height: 10 },
+      { y: 112, height: 10 },
+    ];
+    expect(groupAdjacentRows(rows)).toEqual([[0, 1]]);
+  });
+
+  it("splits lines separated by a large vertical gap", () => {
+    const rows = [
+      { y: 100, height: 10 },
+      { y: 300, height: 10 },
+    ];
+    expect(groupAdjacentRows(rows)).toEqual([[0], [1]]);
+  });
+
+  it("returns indexes ordered top-to-bottom regardless of input order", () => {
+    const rows = [
+      { y: 124, height: 10 },
+      { y: 100, height: 10 },
+      { y: 112, height: 10 },
+    ];
+    expect(groupAdjacentRows(rows)).toEqual([[1, 2, 0]]);
+  });
+
+  it("handles an empty input", () => {
+    expect(groupAdjacentRows([])).toEqual([]);
+  });
+
+  it("keeps separate blocks separate", () => {
+    const rows = [
+      { y: 100, height: 10 },
+      { y: 113, height: 10 },
+      { y: 400, height: 10 },
+      { y: 413, height: 10 },
+    ];
+    expect(groupAdjacentRows(rows)).toEqual([
+      [0, 1],
+      [2, 3],
+    ]);
   });
 });
