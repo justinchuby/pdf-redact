@@ -968,8 +968,7 @@ function addHomeAddressLineCandidates(
       const blockLines = collectNameAddressBlock(lines, line);
       if (blockLines.length > 0) {
         const text = blockLines.map((bl) => cleanAddressCandidateText(bl.text)).join(", ");
-        const rects = blockLines.flatMap((bl) => bl.chars.map((char) => char.rect));
-        addHomeAddressCandidate(pageIndex, text, rects, candidates, seen);
+        addHomeAddressCandidate(pageIndex, text, blockLines, candidates, seen);
         return;
       }
     }
@@ -979,7 +978,13 @@ function addHomeAddressLineCandidates(
       /(?:home|street|mailing)?\s*address(?:\s+and\s+zip(?:\s+code)?)?(?:\s*\([^)]*\))?/i,
     );
     if (sameLineCandidate && isLikelyAddressValue(sameLineCandidate.text)) {
-      addHomeAddressCandidate(pageIndex, sameLineCandidate.text, sameLineCandidate.rects, candidates, seen);
+      addHomeAddressCandidate(
+        pageIndex,
+        sameLineCandidate.text,
+        [{ text: sameLineCandidate.text, chars: sameLineCandidate.chars }],
+        candidates,
+        seen,
+      );
     }
 
     const nearbyOrderedLines = [
@@ -1007,8 +1012,7 @@ function addHomeAddressLineCandidates(
     for (const group of groupAdjacentRows(rows)) {
       const groupLines = group.map((i) => valueLines[i]);
       const text = groupLines.map((groupLine) => cleanAddressCandidateText(groupLine.text)).join(", ");
-      const rects = groupLines.flatMap((groupLine) => groupLine.chars.map((char) => char.rect));
-      addHomeAddressCandidate(pageIndex, text, rects, candidates, seen);
+      addHomeAddressCandidate(pageIndex, text, groupLines, candidates, seen);
     }
   });
 }
@@ -1016,18 +1020,25 @@ function addHomeAddressLineCandidates(
 function addHomeAddressCandidate(
   pageIndex: number,
   text: string,
-  rects: Rect[],
+  blockLines: TextLine[],
   candidates: RedactionCandidate[],
   seen: Set<string>,
 ) {
-  const addressRect = unionRects(rects);
-  if (!addressRect) return;
+  // One tight rect per line instead of a single union box. A union box spans
+  // the empty gaps between lines and can overlap neighboring cells, and MuPDF
+  // removes ANY glyph that touches a redaction rect (blacking only the rect
+  // itself), which would wipe adjacent text. Per-line boxes hug the text.
+  const rects = blockLines
+    .map((line) => unionRects(line.chars.map((char) => char.rect)))
+    .filter((rect): rect is Rect => rect !== null)
+    .map((rect) => padRect(rect, 2, 2));
+  if (rects.length === 0) return;
 
   addCandidate(candidates, seen, {
     pageIndex,
     label: "Address",
     text,
-    rects: [padRect(addressRect, 6, 5)],
+    rects,
   });
 }
 
@@ -1078,6 +1089,7 @@ function lineAfterLabel(line: TextLine, labelPattern: RegExp) {
   if (!text) return null;
   return {
     text,
+    chars,
     rects: chars.map((char) => char.rect),
   };
 }
@@ -1207,18 +1219,32 @@ function findRemainingSearchableTerms(pdfBytes: Uint8Array<ArrayBuffer>): Residu
     const term = candidate.text.trim();
     if (!term) continue;
     const page = document.loadPage(candidate.pageIndex);
-    const found = page.search(term, 8);
-    if (found.length === 0) continue;
+    const matches = page.search(term, 16) as number[][][];
+    if (matches.length === 0) continue;
 
-    const rects = (found as number[][][])
-      .flat()
-      .map(quadToRect)
-      .filter((rect: Rect) => rect.width > 0 && rect.height > 0);
+    // Only keep matches that sit at this candidate's OWN location. Searching is
+    // page-wide, so the same value (or a header word) may appear elsewhere;
+    // blacking those out would delete unrelated text. A match qualifies only if
+    // its bounding box overlaps one of the candidate's existing rects.
+    const rects: Rect[] = [];
+    for (const match of matches) {
+      const matchRects = match.map(quadToRect).filter((rect) => rect.width > 0 && rect.height > 0);
+      const matchBounds = unionRects(matchRects);
+      if (!matchBounds) continue;
+      if (!candidate.rects.some((rect) => rectsOverlap(rect, matchBounds))) continue;
+      rects.push(...matchRects);
+    }
 
-    hits.push({ pageIndex: candidate.pageIndex, text: term, rects });
+    if (rects.length > 0) {
+      hits.push({ pageIndex: candidate.pageIndex, text: term, rects });
+    }
   }
 
   return hits;
+}
+
+function rectsOverlap(a: Rect, b: Rect) {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
 function openPdfFromOriginal() {
