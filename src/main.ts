@@ -61,6 +61,12 @@ type PagePreview = {
   imageUrl: string;
 };
 
+type ResidualHit = {
+  pageIndex: number;
+  text: string;
+  rects: Rect[];
+};
+
 type AppState = {
   file?: File;
   originalBytes?: Uint8Array;
@@ -1033,14 +1039,33 @@ async function downloadRedactedPdf() {
   await nextFrame();
 
   try {
-    const outputBytes = generateRedactedPdf();
-    const remainingTerms = findRemainingSearchableTerms(outputBytes);
-    if (remainingTerms.length > 0) {
+    let extraRects: ExtraRect[] = [];
+    let outputBytes = generateRedactedPdf();
+    let residuals = findRemainingSearchableTerms(outputBytes);
+
+    // Auto-patch: cover any selected value that is still searchable by adding
+    // redaction boxes at the leaked glyph positions, then regenerate. Repeats
+    // a few times in case a patch reveals adjacent leftovers.
+    let passes = 0;
+    while (residuals.length > 0 && passes < 3) {
+      extraRects = [
+        ...extraRects,
+        ...residuals.flatMap((hit) =>
+          hit.rects.map((rect) => ({ pageIndex: hit.pageIndex, rect: padRect(rect, 2, 2) })),
+        ),
+      ];
+      outputBytes = generateRedactedPdf(extraRects);
+      residuals = findRemainingSearchableTerms(outputBytes);
+      passes += 1;
+    }
+
+    if (residuals.length > 0) {
+      const uniqueTerms = [...new Set(residuals.map((hit) => hit.text))];
       const proceed = window.confirm(
-        `Warning: these selected values may still be searchable in the output PDF:\n\n` +
-          `${remainingTerms.map(maskCandidateText).join(", ")}\n\n` +
-          `This can happen when a redaction box does not fully cover the text. ` +
-          `Consider enlarging the box with Draw box, or click OK to download anyway.`,
+        `Warning: these selected values could not be fully removed automatically and may still be searchable:\n\n` +
+          `${uniqueTerms.map(maskCandidateText).join(", ")}\n\n` +
+          `This usually means the text is an image or could not be located. ` +
+          `Use Draw box to cover it manually, or click OK to download anyway.`,
       );
       if (!proceed) return;
     }
@@ -1052,24 +1077,30 @@ async function downloadRedactedPdf() {
   }
 }
 
-function generateRedactedPdf() {
+type ExtraRect = { pageIndex: number; rect: Rect };
+
+function generateRedactedPdf(extraRects: ExtraRect[] = []) {
   const document = openPdfFromOriginal();
   bakeFormFields(document);
-  const byPage = new Map<number, RedactionCandidate[]>();
+  const byPage = new Map<number, Rect[]>();
 
   for (const candidate of selectedCandidates()) {
     const group = byPage.get(candidate.pageIndex) ?? [];
-    group.push(candidate);
+    group.push(...candidate.rects);
     byPage.set(candidate.pageIndex, group);
   }
 
-  for (const [pageIndex, candidates] of byPage.entries()) {
+  for (const { pageIndex, rect } of extraRects) {
+    const group = byPage.get(pageIndex) ?? [];
+    group.push(rect);
+    byPage.set(pageIndex, group);
+  }
+
+  for (const [pageIndex, rects] of byPage.entries()) {
     const page = document.loadPage(pageIndex);
-    for (const candidate of candidates) {
-      for (const rect of candidate.rects) {
-        const annotation = page.createAnnotation("Redact");
-        annotation.setRect([rect.x, rect.y, rect.x + rect.width, rect.y + rect.height]);
-      }
+    for (const rect of rects) {
+      const annotation = page.createAnnotation("Redact");
+      annotation.setRect([rect.x, rect.y, rect.x + rect.width, rect.y + rect.height]);
     }
     page.applyRedactions(
       true,
@@ -1088,21 +1119,27 @@ function bakeFormFields(document: any) {
   }
 }
 
-function findRemainingSearchableTerms(pdfBytes: Uint8Array<ArrayBuffer>) {
+function findRemainingSearchableTerms(pdfBytes: Uint8Array<ArrayBuffer>): ResidualHit[] {
   const document = new mupdf.PDFDocument(pdfBytes.slice());
-  const remaining = new Set<string>();
+  const hits: ResidualHit[] = [];
 
   for (const candidate of selectedCandidates()) {
     if (candidate.label === "Manual box" || candidate.label === "Form SSN area") continue;
     const term = candidate.text.trim();
     if (!term) continue;
     const page = document.loadPage(candidate.pageIndex);
-    if (page.search(term, 1).length > 0) {
-      remaining.add(term);
-    }
+    const found = page.search(term, 8);
+    if (found.length === 0) continue;
+
+    const rects = (found as number[][][])
+      .flat()
+      .map(quadToRect)
+      .filter((rect: Rect) => rect.width > 0 && rect.height > 0);
+
+    hits.push({ pageIndex: candidate.pageIndex, text: term, rects });
   }
 
-  return [...remaining];
+  return hits;
 }
 
 function openPdfFromOriginal() {
