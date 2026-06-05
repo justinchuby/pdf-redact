@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  EIN_RE,
+  ITIN_RE,
+  PHONE_RE,
   REDACTION_PADDING_POINTS,
+  SSN_RE,
+  TAX_LABEL_RE,
   cleanAddressCandidateText,
   escapeHtml,
+  isAddressLabelLine,
   isLikelyAddressValue,
   isPlausibleSsnDigits,
   maskCandidateText,
@@ -14,6 +20,10 @@ import {
   redactedFileName,
   unionRects,
 } from "./redaction";
+
+function matchGroup(re: RegExp, text: string, group = 1): string[] {
+  return [...text.matchAll(re)].map((m) => m[group].trim());
+}
 
 describe("redactedFileName", () => {
   it("inserts .redacted before the .pdf extension", () => {
@@ -196,5 +206,111 @@ describe("padRect", () => {
       width: 8,
       height: 12,
     });
+  });
+});
+
+describe("EIN_RE", () => {
+  it("matches a hyphenated EIN", () => {
+    expect(matchGroup(EIN_RE, "Employer ID 12-3456789 here")).toEqual(["12-3456789"]);
+  });
+
+  it("matches a space-separated EIN", () => {
+    expect(matchGroup(EIN_RE, "EIN 12 3456789")).toEqual(["12 3456789"]);
+  });
+
+  it("does not match a bare 9-digit run (handled by SSN)", () => {
+    expect(matchGroup(EIN_RE, "123456789")).toEqual([]);
+  });
+
+  it("does not match inside a longer number", () => {
+    expect(matchGroup(EIN_RE, "1234567890123")).toEqual([]);
+  });
+});
+
+describe("PHONE_RE", () => {
+  it("matches common phone formats", () => {
+    expect(matchGroup(PHONE_RE, "Call (555) 123-4567 now")).toEqual(["(555) 123-4567"]);
+    expect(matchGroup(PHONE_RE, "tel 555-123-4567")).toEqual(["555-123-4567"]);
+    expect(matchGroup(PHONE_RE, "555.123.4567")).toEqual(["555.123.4567"]);
+  });
+
+  it("matches a +1 country code prefix", () => {
+    expect(matchGroup(PHONE_RE, "+1 555-123-4567")).toEqual(["+1 555-123-4567"]);
+  });
+
+  it("does not match a bare 10-digit run", () => {
+    expect(matchGroup(PHONE_RE, "5551234567")).toEqual([]);
+  });
+
+  it("does not match an SSN", () => {
+    expect(matchGroup(PHONE_RE, "123-45-6789")).toEqual([]);
+  });
+});
+
+describe("TAX_LABEL_RE", () => {
+  it("matches W-2 employer identification number", () => {
+    expect(matchGroup(TAX_LABEL_RE, "Employer identification number (EIN) 12-3456789", 1)).toEqual([
+      "12-3456789",
+    ]);
+  });
+
+  it("matches 1099 PAYER'S TIN", () => {
+    expect(matchGroup(TAX_LABEL_RE, "PAYER'S TIN 12-3456789", 1)).toEqual(["12-3456789"]);
+  });
+
+  it("matches 1099 RECIPIENT'S TIN with an SSN", () => {
+    expect(matchGroup(TAX_LABEL_RE, "RECIPIENT'S TIN 123-45-6789", 1)).toEqual(["123-45-6789"]);
+  });
+
+  it("matches federal identification number", () => {
+    expect(matchGroup(TAX_LABEL_RE, "Federal identification number 98-7654321", 1)).toEqual([
+      "98-7654321",
+    ]);
+  });
+
+  it("does not match a number with no nearby label", () => {
+    expect(matchGroup(TAX_LABEL_RE, "Total wages 12-3456789", 1)).toEqual([]);
+  });
+});
+
+describe("SSN_RE / ITIN_RE", () => {
+  it("SSN_RE matches a standard SSN", () => {
+    expect(matchGroup(SSN_RE, "ssn 123-45-6789")).toEqual(["123-45-6789"]);
+  });
+
+  it("ITIN_RE matches a 9xx ITIN", () => {
+    expect(matchGroup(ITIN_RE, "ITIN 912-78-1234")).toEqual(["912-78-1234"]);
+  });
+});
+
+describe("isAddressLabelLine", () => {
+  it("matches the 1040 home address label", () => {
+    expect(isAddressLabelLine("Home address (number and street)")).toBe(true);
+  });
+
+  it("matches the W-2 employee address label", () => {
+    expect(isAddressLabelLine("Employee's address and ZIP code")).toBe(true);
+  });
+
+  it("matches the W-2 employer address label", () => {
+    expect(isAddressLabelLine("Employer's name, address, and ZIP code")).toBe(true);
+  });
+
+  it("matches the 1099 recipient address label", () => {
+    expect(isAddressLabelLine("RECIPIENT'S street address (including apt. no.)")).toBe(true);
+  });
+
+  it("does not match a line without the word address", () => {
+    expect(isAddressLabelLine("Wages, tips, other compensation")).toBe(false);
+  });
+
+  it("does not match an address value line", () => {
+    expect(isAddressLabelLine("123 Main St, Springfield, IL 62704")).toBe(false);
+  });
+});
+
+describe("isLikelyAddressValue (label rejection)", () => {
+  it("rejects lines containing the word address", () => {
+    expect(isLikelyAddressValue("Employee's address and ZIP code")).toBe(false);
   });
 });

@@ -83,8 +83,26 @@ export function isLikelyAddressValue(text: string) {
   if (normalized.length < 5) return false;
   if (!/\d/.test(normalized)) return false;
   if (/\b(?:city|town|state|zip|foreign|presidential|campaign|instructions?)\b/.test(normalized)) return false;
-  if (normalized.includes("home address")) return false;
+  if (/\baddress\b/.test(normalized)) return false;
   return /[a-z]/i.test(normalized);
+}
+
+// True when a line looks like an address *label* on a tax form. Covers the
+// 1040 "Home address" plus W-2 / 1099 variants such as "Employee's address",
+// "Employer's name, address, and ZIP code", and "RECIPIENT'S address".
+export function isAddressLabelLine(text: string) {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized.includes("address")) return false;
+  if (/\b(?:home|street|mailing)\s+address\b/.test(normalized)) return true;
+  if (/\baddress\s+and\s+zip\b/.test(normalized)) return true;
+  if (
+    /\b(?:employee|employer|recipient|payer|spouse|borrower|lender|filer|student)'?s?\b[^.]{0,40}\baddress\b/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export function cleanAddressCandidateText(text: string) {
@@ -106,3 +124,26 @@ export function padRect(rect: Rect, padX: number, padY: number) {
     height: rect.height + padY * 2,
   };
 }
+
+// --- Detection patterns (exported for unit testing) ---
+
+// US Social Security numbers such as 123-45-6789.
+export const SSN_RE = /(?:^|[^\d])((?!000|666|9\d\d)\d{3}[- ]?(?!00)\d{2}[- ]?(?!0000)\d{4})(?!\d)/g;
+
+// US ITIN numbers that begin with 9.
+export const ITIN_RE = /(?:^|[^\d])(9\d{2}[- ]?(?:7\d|8[0-8]|9[0-2]|9[4-9])[- ]?\d{4})(?!\d)/g;
+
+// Employer Identification Numbers such as 12-3456789 (a separator is required
+// so we don't double-flag bare 9-digit SSNs, which the SSN pattern handles).
+export const EIN_RE = /(?:^|[^\d])(\d{2}[-\s]\d{7})(?!\d)/g;
+
+// US phone numbers. Requires phone-style punctuation (parentheses or a
+// separator between groups) to avoid matching plain digit runs on forms.
+export const PHONE_RE =
+  /(?:^|[^\d])((?:\+?1[-.\s]?)?(?:\(\d{3}\)\s?|\d{3}[-.\s])\d{3}[-.\s]\d{4})(?!\d)/g;
+
+// 9-digit taxpayer IDs (SSN/EIN/ITIN/TIN) that appear right after an
+// identifying label. Covers the label vocabulary used across W-2, the 1099
+// series (PAYER'S / RECIPIENT'S TIN, federal identification number), 1098, etc.
+export const TAX_LABEL_RE =
+  /\b(?:ssn|social\s+security(?:\s+(?:number|no\.?))?|i?tin|taxpayer\s+id(?:entification)?(?:\s+(?:no\.?|number))?|tax\s+id|ein|employer\s+identification\s+(?:number|no\.?)|payer'?s?\s+(?:tin|fed(?:eral)?\.?\s*id(?:entification)?(?:\s+(?:no\.?|number))?)|recipient'?s?\s+(?:tin|id(?:entification)?(?:\s+(?:no\.?|number))?)|federal\s+identification\s+(?:number|no\.?)|fed\.?\s*id\.?\s*(?:no\.?)?)\b[^\d]{0,80}(\d{2,3}[-\s]?\d{2}[-\s]?\d{4,7})(?!\d)/gi;

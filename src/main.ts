@@ -1,9 +1,15 @@
 import * as mupdf from "mupdf";
 import "./style.css";
 import {
+  EIN_RE,
+  ITIN_RE,
+  PHONE_RE,
   REDACTION_PADDING_POINTS,
+  SSN_RE,
+  TAX_LABEL_RE,
   cleanAddressCandidateText,
   escapeHtml,
+  isAddressLabelLine,
   isLikelyAddressValue,
   isPlausibleSsnDigits,
   maskCandidateText,
@@ -73,7 +79,7 @@ const PATTERNS: PatternDefinition[] = [
     id: "ssn",
     label: "SSN",
     description: "US Social Security numbers such as 123-45-6789",
-    expression: /(?:^|[^\d])((?!000|666|9\d\d)\d{3}[- ]?(?!00)\d{2}[- ]?(?!0000)\d{4})(?!\d)/g,
+    expression: SSN_RE,
     group: 1,
     defaultEnabled: true,
   },
@@ -90,24 +96,24 @@ const PATTERNS: PatternDefinition[] = [
     id: "itin",
     label: "ITIN",
     description: "US ITIN numbers that begin with 9",
-    expression: /(?:^|[^\d])(9\d{2}[- ]?(?:7\d|8[0-8]|9[0-2]|9[4-9])[- ]?\d{4})(?!\d)/g,
+    expression: ITIN_RE,
     group: 1,
     defaultEnabled: true,
   },
   {
     id: "ein",
     label: "EIN",
-    description: "Employer Identification Numbers such as 12-3456789",
-    expression: /(?:^|[^\d])(\d{2}-\d{7})(?!\d)/g,
+    description: "Employer Identification Numbers such as 12-3456789 or 12 3456789",
+    expression: EIN_RE,
     group: 1,
     defaultEnabled: true,
   },
   {
     id: "tax-label",
     label: "Tax ID labels",
-    description: "Numbers near labels like SSN, TIN, Taxpayer ID, or EIN",
-    expression:
-      /\b(?:ssn|social\s+security(?:\s+number)?|tin|taxpayer id|tax id|ein|itin)\b[^\d]{0,80}(\d{2,3}[- ]?\d{2}[- ]?\d{4,7})/gi,
+    description:
+      "Taxpayer IDs near labels like SSN, TIN, EIN, PAYER'S/RECIPIENT'S TIN, or federal identification number (W-2, 1099, 1098)",
+    expression: TAX_LABEL_RE,
     group: 1,
     defaultEnabled: true,
   },
@@ -121,8 +127,8 @@ const PATTERNS: PatternDefinition[] = [
   },
   {
     id: "home-address",
-    label: "Home address",
-    description: "Home address fields on tax forms",
+    label: "Address",
+    description: "Address fields on tax forms (1040 home address, W-2/1099 employee, recipient, payer addresses)",
     expression: /\bhome\s+address\b[^\n\r\d]{0,100}(\d[^\n\r]{4,120})/gi,
     group: 1,
     defaultEnabled: true,
@@ -130,10 +136,10 @@ const PATTERNS: PatternDefinition[] = [
   {
     id: "phone",
     label: "Phone",
-    description: "US phone numbers. Disabled by default to reduce false positives.",
-    expression: /(?:^|[^\d])((?:\+1[-. ]?)?(?:\(\d{3}\)|\d{3})[-. ]?\d{3}[-. ]?\d{4})(?!\d)/g,
+    description: "US phone numbers such as (555) 123-4567 or 555-123-4567",
+    expression: PHONE_RE,
     group: 1,
-    defaultEnabled: false,
+    defaultEnabled: true,
   },
 ];
 
@@ -871,10 +877,12 @@ function addHomeAddressLineCandidates(
   seen: Set<string>,
 ) {
   lines.forEach((line, index) => {
-    const normalized = line.text.toLowerCase();
-    if (!normalized.includes("home address")) return;
+    if (!isAddressLabelLine(line.text)) return;
 
-    const sameLineCandidate = lineAfterLabel(line, /home\s+address(?:\s*\([^)]*\))?/i);
+    const sameLineCandidate = lineAfterLabel(
+      line,
+      /(?:home|street|mailing)?\s*address(?:\s+and\s+zip(?:\s+code)?)?(?:\s*\([^)]*\))?/i,
+    );
     if (sameLineCandidate && isLikelyAddressValue(sameLineCandidate.text)) {
       addHomeAddressCandidate(pageIndex, sameLineCandidate.text, sameLineCandidate.rects, candidates, seen);
     }
@@ -906,7 +914,7 @@ function addHomeAddressCandidate(
 
   addCandidate(candidates, seen, {
     pageIndex,
-    label: "Home address",
+    label: "Address",
     text,
     rects: [padRect(addressRect, 4, 3)],
   });
