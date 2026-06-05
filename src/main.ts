@@ -778,6 +778,35 @@ function addLineBasedCandidates(
   }
 }
 
+// Orders the lines to search for an SSN label's digit row by GEOMETRY rather
+// than reading order: the label line itself first (digits printed after the
+// label), then lines spatially just below the label, nearest first, within a
+// reasonable vertical drop and horizontal band. Stacked SSN fields (Your vs
+// Spouse's) interleave in the structured-text stream, so reading order would
+// assign a label to the wrong digit row.
+function orderedSsnCandidateLines(lines: TextLine[], labelLine: TextLine, index: number): TextLine[] {
+  const labelRect = lineRect(labelLine);
+  if (!labelRect) return [labelLine, ...lines.slice(index + 1, index + 3)];
+
+  const labelBottom = labelRect.y + labelRect.height;
+  const maxDrop = labelRect.height * 4;
+
+  const below = lines
+    .filter((line) => line !== labelLine && line.chars.length > 0)
+    .map((line) => ({ line, rect: lineRect(line) }))
+    .filter((entry): entry is { line: TextLine; rect: Rect } => entry.rect !== null)
+    .filter(({ rect }) => {
+      const startsBelow = rect.y >= labelBottom - labelRect.height * 0.6;
+      const withinDrop = rect.y <= labelBottom + maxDrop;
+      const overlapsX = rect.x <= labelRect.x + labelRect.width + 40 && rect.x + rect.width >= labelRect.x - 12;
+      return startsBelow && withinDrop && overlapsX;
+    })
+    .sort((a, b) => a.rect.y - b.rect.y)
+    .map((entry) => entry.line);
+
+  return [labelLine, ...below];
+}
+
 function addFormSsnLineCandidates(
   pageIndex: number,
   lines: TextLine[],
@@ -791,7 +820,7 @@ function addFormSsnLineCandidates(
     if (!labelMatch || labelMatch.index === undefined) return;
 
     const labelEnd = labelMatch.index + labelMatch[0].length;
-    const candidateLines = [line, ...lines.slice(index + 1, index + 3)];
+    const candidateLines = orderedSsnCandidateLines(lines, line, index);
     for (const candidateLine of candidateLines) {
       const startIndex = candidateLine === line ? labelEnd : 0;
       const digitIndexes = collectDigitIndexes(candidateLine, startIndex).slice(0, 9);
