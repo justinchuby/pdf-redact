@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   EIN_RE,
   ITIN_RE,
+  MASKED_SSN_RE,
   PHONE_RE,
   REDACTION_PADDING_POINTS,
   SSN_RE,
@@ -280,6 +281,32 @@ describe("SSN_RE / ITIN_RE", () => {
 
   it("ITIN_RE matches a 9xx ITIN", () => {
     expect(matchGroup(ITIN_RE, "ITIN 912-78-1234")).toEqual(["912-78-1234"]);
+  });
+});
+
+describe("MASKED_SSN_RE", () => {
+  it("matches an X-masked SSN with hyphens", () => {
+    expect(matchGroup(MASKED_SSN_RE, "SSN XXX-XX-1234")).toEqual(["XXX-XX-1234"]);
+  });
+
+  it("matches a lowercase x-masked SSN", () => {
+    expect(matchGroup(MASKED_SSN_RE, "ssn xxx-xx-6789")).toEqual(["xxx-xx-6789"]);
+  });
+
+  it("matches an asterisk-masked SSN", () => {
+    expect(matchGroup(MASKED_SSN_RE, "***-**-4321")).toEqual(["***-**-4321"]);
+  });
+
+  it("matches a masked SSN without separators", () => {
+    expect(matchGroup(MASKED_SSN_RE, "XXXXX1234")).toEqual(["XXXXX1234"]);
+  });
+
+  it("does not match a fully numeric SSN", () => {
+    expect(matchGroup(MASKED_SSN_RE, "123-45-6789")).toEqual([]);
+  });
+
+  it("does not match when there are too few trailing digits", () => {
+    expect(matchGroup(MASKED_SSN_RE, "XXX-XX-12")).toEqual([]);
   });
 });
 

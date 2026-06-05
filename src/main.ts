@@ -3,6 +3,7 @@ import "./style.css";
 import {
   EIN_RE,
   ITIN_RE,
+  MASKED_SSN_RE,
   PHONE_RE,
   REDACTION_PADDING_POINTS,
   SSN_RE,
@@ -89,6 +90,14 @@ const PATTERNS: PatternDefinition[] = [
     description: "Tax form SSNs split into 3-2-4 digit boxes near Social Security Number labels",
     expression:
       /\b(?:(?:your|spouse'?s?)\s+)?(?:ssn|social\s+security\s+number)\b[\s\S]{0,180}?((?:\d[\s-]*){3}[\s-]+(?:\d[\s-]*){2}[\s-]+(?:\d[\s-]*){4})(?![\s-]*\d)/gi,
+    group: 1,
+    defaultEnabled: true,
+  },
+  {
+    id: "masked-ssn",
+    label: "Masked SSN",
+    description: "Partially-masked SSNs printed on W-2/1099 forms such as XXX-XX-1234 or ***-**-1234",
+    expression: MASKED_SSN_RE,
     group: 1,
     defaultEnabled: true,
   },

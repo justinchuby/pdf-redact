@@ -130,6 +130,12 @@ export function padRect(rect: Rect, padX: number, padY: number) {
 // US Social Security numbers such as 123-45-6789.
 export const SSN_RE = /(?:^|[^\d])((?!000|666|9\d\d)\d{3}[- ]?(?!00)\d{2}[- ]?(?!0000)\d{4})(?!\d)/g;
 
+// Partially-masked SSNs as printed on many W-2s and 1099s, where the first
+// five digits are replaced with X or * but the last four remain, e.g.
+// XXX-XX-1234, ***-**-1234, or XXXXX1234.
+export const MASKED_SSN_RE =
+  /(?:^|[^\w])((?:[X*]{3}[- ]?[X*]{2}[- ]?\d{4})|(?:[X*]{5}\d{4}))(?![\w])/gi;
+
 // US ITIN numbers that begin with 9.
 export const ITIN_RE = /(?:^|[^\d])(9\d{2}[- ]?(?:7\d|8[0-8]|9[0-2]|9[4-9])[- ]?\d{4})(?!\d)/g;
 
