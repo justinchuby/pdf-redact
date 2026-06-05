@@ -99,7 +99,7 @@ const PATTERNS: PatternDefinition[] = [
     label: "Form SSN fields",
     description: "Tax form SSNs split into 3-2-4 digit boxes near Social Security Number labels",
     expression:
-      /\b(?:(?:your|spouse'?s?)\s+)?(?:ssn|social\s+security\s+number)\b[\s\S]{0,180}?((?:\d[\s-]*){3}[\s-]+(?:\d[\s-]*){2}[\s-]+(?:\d[\s-]*){4})(?![\s-]*\d)/gi,
+      /\b(?:(?:your|spouse['\u2019]?s?)\s+)?(?:ssn|social\s+security\s+number)\b[\s\S]{0,180}?((?:\d[\s-]*){3}[\s-]+(?:\d[\s-]*){2}[\s-]+(?:\d[\s-]*){4})(?![\s-]*\d)/gi,
     group: 1,
     defaultEnabled: true,
   },
@@ -779,7 +779,7 @@ function addFormSsnLineCandidates(
   candidates: RedactionCandidate[],
   seen: Set<string>,
 ) {
-  const labelPattern = /\b(?:your|spouse'?s?)\s+social\s+security\s+number\b/i;
+  const labelPattern = /\b(?:your|spouse['\u2019]?s?)\s+social\s+security\s+number\b/i;
 
   lines.forEach((line, index) => {
     const labelMatch = line.text.match(labelPattern);

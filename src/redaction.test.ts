@@ -323,6 +323,10 @@ describe("TAX_LABEL_RE", () => {
     expect(matchGroup(TAX_LABEL_RE, "RECIPIENT'S TIN 123-45-6789", 1)).toEqual(["123-45-6789"]);
   });
 
+  it("matches a curly-apostrophe PAYER\u2019S TIN", () => {
+    expect(matchGroup(TAX_LABEL_RE, "PAYER\u2019S TIN 12-3456789", 1)).toEqual(["12-3456789"]);
+  });
+
   it("matches federal identification number", () => {
     expect(matchGroup(TAX_LABEL_RE, "Federal identification number 98-7654321", 1)).toEqual([
       "98-7654321",
@@ -385,6 +389,10 @@ describe("isAddressLabelLine", () => {
 
   it("matches the 1099 recipient address label", () => {
     expect(isAddressLabelLine("RECIPIENT'S street address (including apt. no.)")).toBe(true);
+  });
+
+  it("matches a curly-apostrophe Employer\u2019s address label", () => {
+    expect(isAddressLabelLine("Employer\u2019s name, address, and ZIP code")).toBe(true);
   });
 
   it("does not match a line without the word address", () => {
