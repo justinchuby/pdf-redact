@@ -599,6 +599,7 @@ async function scanCurrentFile() {
     bakeFormFields(document);
     state.candidates = [...scanDocument(document), ...state.manualCandidates];
     state.previews = renderPagePreviews(document);
+    patchSearchableResiduals();
     state.scanDirty = false;
   } catch (error) {
     state.candidates = [];
@@ -606,6 +607,26 @@ async function scanCurrentFile() {
     showError(error);
   } finally {
     setBusy(false);
+  }
+}
+
+// After scanning, verify by generating the redacted PDF and searching for any
+// still-searchable selected value. Merge the leaked glyph positions back into
+// the matching candidate so the redaction box visibly grows and the user can
+// review the full coverage in the preview before downloading.
+function patchSearchableResiduals() {
+  for (let pass = 0; pass < 3; pass += 1) {
+    const outputBytes = generateRedactedPdf();
+    const residuals = findRemainingSearchableTerms(outputBytes);
+    if (residuals.length === 0) return;
+
+    for (const hit of residuals) {
+      const candidate = state.candidates.find(
+        (item) => item.pageIndex === hit.pageIndex && item.text === hit.text && item.selected,
+      );
+      if (!candidate) continue;
+      candidate.rects = [...candidate.rects, ...hit.rects.map((rect) => padRect(rect, 2, 2))];
+    }
   }
 }
 
